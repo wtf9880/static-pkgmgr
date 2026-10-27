@@ -1,0 +1,3 @@
+NAME=ripgrep
+DESCRIPTION=ripgrep (rg): a recursive search tool
+HOMEPAGE=https://github.com/sharkdp/ripgrep

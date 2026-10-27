@@ -166,7 +166,11 @@ spm_lock_update() {
 		pkgs=("$@")
 	else
 		if [ -d "$SPM_ROOT/packages" ]; then
+			# §12 "all packages": a directory without lock.sh+meta is not a
+			# package (e.g. a test double like fakebin in tests/fixtures) and is
+			# skipped rather than aborting the whole lock update.
 			mapfile -t pkgs < <(find -L "$SPM_ROOT/packages" -mindepth 1 -maxdepth 1 -type d \
+				-exec test -f '{}/lock.sh' \; -exec test -f '{}/meta' \; \
 				-printf '%f\n' 2>/dev/null | sort)
 		fi
 		if [ "${#pkgs[@]}" -eq 0 ]; then

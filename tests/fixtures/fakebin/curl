@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# tests/fixtures/fakebin/curl -- offline test double for `curl`.
+#
+# Serves canned fixture data for static-pkgmgr recipe URLs (the GitHub releases
+# API, the nodejs.org dist index, SHASUMS256.txt, and the canned archive
+# downloads) so Phase-4 recipes and the github helper can be exercised without
+# network access. file:// URLs and any unrecognised URL are passed through to
+# the real curl. Used ONLY by tests; not part of the package (no .sh suffix,
+# so CI's shellcheck glob skips it).
+#
+# Fixtures root is $SPM_FAKE_FIXTURES (set up by the tests that use this).
+set -Eeuo pipefail
+
+# Find the real curl (this directory is prepended to PATH during tests, so the
+# first `curl` on PATH is this script).
+real_curl=""
+while IFS= read -r line; do
+	case "$line" in
+		*"$0"*) ;;               # skip this fake script
+		*) real_curl="$line"; break ;;
+	esac
+done < <(type -aP curl 2>/dev/null)
+if [ -z "$real_curl" ]; then
+	printf 'fakebin/curl: no real curl found on PATH\n' >&2
+	exit 127
+fi
+
+fx="${SPM_FAKE_FIXTURES:-}"
+
+# Pull the URL out of the arguments (the first http/https/file argument).
+url=""
+for a in "$@"; do
+	case "$a" in
+		http://*|https://*|file://*) url="$a" ;;
+	esac
+done
+if [ -z "$url" ]; then
+	exec "$real_curl" "$@"
+fi
+
+# file:// URLs (and anything we do not recognise) hit the real network-less curl.
+case "$url" in
+	file://*) exec "$real_curl" "$@" ;;
+esac
+
+# Detect a HEAD request: a short-option group containing 'I' (-I, -sIL, ...).
+head=0
+for a in "$@"; do
+	case "$a" in -*I*) head=1 ;; esac
+done
+
+# Serve an archive fixture: HEAD -> Content-Length header, GET -> bytes.
+serve_archive() {
+	local file="$1"
+	if [ "$head" = 1 ]; then
+		printf 'HTTP/1.1 200 OK\r\nContent-Length: %s\r\n\r\n' "$(wc -c < "$file")"
+	else
+		cat "$file"
+	fi
+}
+
+case "$url" in
+	*api.github.com/repos/*/releases*)
+		if [ -n "$fx" ] && [ -f "$fx/ripgrep-releases.json" ]; then
+			cat "$fx/ripgrep-releases.json"; exit 0
+		fi
+		;;
+	*nodejs.org/dist/index.json*)
+		if [ -n "$fx" ] && [ -f "$fx/nodejs-index.json" ]; then
+			cat "$fx/nodejs-index.json"; exit 0
+		fi
+		;;
+	*nodejs.org/dist/*/SHASUMS256.txt*)
+		if [ -n "$fx" ] && [ -f "$fx/nodejs-SHASUMS256.txt" ]; then
+			cat "$fx/nodejs-SHASUMS256.txt"; exit 0
+		fi
+		;;
+	*nodejs.org/dist/*/node-v*-linux-*.tar.xz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4node.tar.xz" ]; then
+			serve_archive "$fx/phase4node.tar.xz"; exit 0
+		fi
+		;;
+	*github.com/*/releases/download/*ripgrep*.tar.gz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4rg.tar.gz" ]; then
+			serve_archive "$fx/phase4rg.tar.gz"; exit 0
+		fi
+		;;
+esac
+
+# Unrecognised https URL: fall back to the real curl (network).
+exec "$real_curl" "$@"

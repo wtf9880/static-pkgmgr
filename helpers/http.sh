@@ -11,23 +11,33 @@
 spm_stream_extract() {
 	local url="$1" sha="$2" dest="$3"
 	shift 3
-	local tmp hash
+	local tmp hash fifo sha_pid
 	tmp=$(mktemp)
 	hash=$(mktemp)
-	# curl -> tee (split: hash sink + stdout) -> tar. -f makes curl fail on HTTP
-	# errors; pipefail (caller's option) surfaces a failing stage.
-	if ! curl -fLs "$url" | tee >(sha256sum >"$hash") | tar "$@" -C "$dest"; then
-		rm -f "$tmp" "$hash"
+	# Hash the download in a tracked background job reading from a FIFO. A plain
+	# `>(sha256sum)` process substitution is NOT waited on by `wait`, which races
+	# `read $hash` and yields an empty digest (flaky sha mismatch). A FIFO plus
+	# an explicit `wait $sha_pid` closes the loop. The archive is never stored.
+	fifo=$(mktemp -u)
+	mkfifo "$fifo"
+	sha256sum <"$fifo" >"$hash" &
+	sha_pid=$!
+	# curl -> tee (split: hash sink via FIFO + stdout -> tar). -f makes curl fail
+	# on HTTP errors; pipefail (caller's option) surfaces a failing stage.
+	if ! curl -fLs "$url" | tee "$fifo" | tar "$@" -C "$dest"; then
+		kill "$sha_pid" 2>/dev/null || true
+		wait "$sha_pid" 2>/dev/null || true
+		rm -f "$tmp" "$hash" "$fifo"
 		printf 'spm_stream_extract: download or extraction failed: %s\n' "$url" >&2
 		return 1
 	fi
-	# Reap the hash process so the file is complete.
-	wait 2>/dev/null || true
+	# Reap the hasher so the hash file is complete before reading it.
+	wait "$sha_pid" 2>/dev/null || true
 	local got=""
 	if [ -s "$hash" ]; then
 		read -r got _ < "$hash" || true
 	fi
-	rm -f "$tmp" "$hash"
+	rm -f "$tmp" "$hash" "$fifo"
 	if [ "$got" != "$sha" ]; then
 		printf 'spm_stream_extract: sha256 mismatch for %s: expected %s, got %s\n' \
 			"$url" "$sha" "$got" >&2
@@ -56,4 +66,36 @@ spm_download_verified() {
 		return 1
 	fi
 	return 0
+}
+
+# spm_http_size <url>
+# Print the size in bytes: the last Content-Length seen during a HEAD request
+# (following redirects with -L), or nothing when the header is absent. Returns
+# non-zero when the request fails or the size cannot be determined. (§8)
+spm_http_size() {
+	local url="$1" size=""
+	# -I sends HEAD, -L follows redirects, -s silences progress. awk keeps the
+	# last Content-Length across redirect hops and strips a trailing CR.
+	size=$(curl -sIL "$url" 2>/dev/null \
+		| awk 'tolower($1) == "content-length:" { v=$2 } END { sub(/\r/, "", v); if (v != "") print v }')
+	if [ -n "$size" ]; then
+		printf '%s\n' "$size"
+		return 0
+	fi
+	printf 'spm_http_size: no Content-Length: %s\n' "$url" >&2
+	return 1
+}
+
+# spm_http_sha256 <url>
+# Stream the download through the SHA256 hasher and print the hex digest.
+# Nothing is written to disk (trust on first use) -- prefer an upstream
+# checksum (see spm_sha256_from_checksums) when a recipe publishes one. (§8, §14)
+spm_http_sha256() {
+	local url="$1" digest=""
+	if ! digest=$(curl -fsSL "$url" 2>/dev/null | sha256sum 2>/dev/null); then
+		printf 'spm_http_sha256: download failed: %s\n' "$url" >&2
+		return 1
+	fi
+	# sha256sum prints "<hash>  -"; take the first field.
+	printf '%s\n' "$digest" | cut -d' ' -f1
 }
