@@ -1,0 +1,3 @@
+NAME=helloapp
+DESCRIPTION=static-pkgmgr test fixture app
+HOMEPAGE=https://example.invalid/helloapp

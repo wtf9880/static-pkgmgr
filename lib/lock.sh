@@ -1,0 +1,191 @@
+# lib/lock.sh -- lock (pin) management (§6, §7.2, §12).
+#
+# Sourced by the entrypoint; defines functions only.
+# shellcheck shell=bash
+
+# Validate a pin file against the §6 rules. $1 = pin file, $2 = package name.
+# Returns 0 if valid, 1 otherwise.
+spm_validate_pin() {
+	local pin="$1" pkg="${2-}"
+	local testmode="${SPM_TEST_MODE:-0}"
+	[ -f "$pin" ] || return 1
+	jq -e --arg pkg "$pkg" --arg testmode "$testmode" '
+		if type == "object" then . else null end
+		| .schema == 1
+		  and (.package | type == "string"
+		       and test("^[a-z0-9][a-z0-9._-]*$")
+		       and . == $pkg)
+		  and (.version | type == "string" and length > 0)
+		  and (.requested == null
+		       or (.requested | type == "string"
+		           and test("^[A-Za-z0-9._+-]+$")))
+		  and (.resolved_at | type == "string" and length > 0)
+		  and (.artifacts | type == "object" and length >= 1)
+		  and ([.artifacts | keys[] | test("^[A-Za-z0-9_+-]+$")] | all)
+		  and ([.artifacts[] | (.url | type == "string"
+		       and (startswith("https://")
+		            or ($testmode == "1" and startswith("file://"))))]
+		       | all)
+		  and ([.artifacts[] | (.sha256 | type == "string"
+		                        and test("^[0-9a-f]{64}$"))] | all)
+		  and ([.artifacts[] | (.size == null
+		       or (.size | type == "number" and (. == floor)))] | all)
+	' "$pin" >/dev/null 2>&1
+}
+
+# Atomically write pin JSON (read from stdin) for <pkg>: validate with jq,
+# then mv into $SPM_CONFIG_DIR/locks. A failure keeps the previous pin. (§6)
+spm_write_pin() {
+	local pkg="$1"
+	local locksdir="$SPM_CONFIG_DIR/locks"
+	mkdir -p "$locksdir"
+	local tmp; tmp=$(mktemp "$locksdir/.pin.XXXXXX")
+	if ! jq . > "$tmp"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	if ! spm_validate_pin "$tmp" "$pkg"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	mv -f "$tmp" "$locksdir/$pkg.json"
+}
+
+# Resolve one package spec and write its pin. <spec> is pkg, pkg@ver, or
+# pkg@latest; otherwise the existing requested value is preserved. (§12)
+spm_lock_one() {
+	local spec="$1"
+	local pkg raw
+	if [[ "$spec" == *@* ]]; then
+		pkg="${spec%%@*}"
+		raw="${spec#*@}"
+	else
+		pkg="$spec"
+		raw=""
+	fi
+	[[ "$pkg" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \
+		|| spm_die "lock: invalid package name: $pkg" 1
+	local recipe="$SPM_ROOT/packages/$pkg"
+	[ -d "$recipe" ] && [ -f "$recipe/lock.sh" ] && [ -f "$recipe/meta" ] \
+		|| spm_die "lock: no recipe for package: $pkg" 1
+	local name
+	name=$(spm_get_kv "$recipe/meta" NAME) || name=""
+	[ "$name" = "$pkg" ] \
+		|| spm_die "lock: recipe NAME ($name) does not match package name ($pkg)" 1
+
+	local pin="$SPM_CONFIG_DIR/locks/$pkg.json"
+	local req_env="" req_is_null=0 req_val=""
+	if [ -n "$raw" ]; then
+		if [ "$raw" = "latest" ]; then
+			req_is_null=1
+		else
+			req_is_null=0
+			req_val="$raw"
+		fi
+	else
+		# Preserve the existing requested value, or null if no pin.
+		if [ -f "$pin" ]; then
+			local existing; existing=$(jq -r '.requested // "null"' "$pin")
+			if [ "$existing" = "null" ]; then
+				req_is_null=1
+			else
+				req_is_null=0
+				req_val="$existing"
+			fi
+		else
+			req_is_null=1
+		fi
+	fi
+	if [ "$req_is_null" = 0 ]; then
+		[[ "$req_val" =~ ^[A-Za-z0-9._+-]+$ ]] \
+			|| spm_die "lock: invalid requested version: $req_val" 1
+		req_env="$req_val"
+	fi
+
+	# Run the recipe in a fresh temp dir (§7.2). Captures stdout (recipe JSON).
+	local tmp; tmp=$(mktemp -d)
+	local out
+	if ! out=$( SPM_REQUESTED_VERSION="$req_env" SPM_HELPERS="$SPM_ROOT/helpers" \
+		GITHUB_TOKEN="${GITHUB_TOKEN:-}" bash "$recipe/lock.sh" ); then
+		rm -rf "$tmp"
+		spm_warn "lock: recipe failed for $pkg; keeping previous pin"
+		[ -f "$pin" ] || spm_die "lock: no previous pin for $pkg" 1
+		return 1
+	fi
+	rm -rf "$tmp"
+
+	# §7.2: recipe must print exactly one JSON object with version + artifacts.
+	if ! printf '%s' "$out" | jq -e \
+		'(.version | type == "string" and length > 0) and (.artifacts | type == "object" and length >= 1)' \
+		>/dev/null 2>&1; then
+		spm_warn "lock: recipe output for $pkg is not valid {version,artifacts}"
+		[ -f "$pin" ] || spm_die "lock: no previous pin for $pkg" 1
+		return 1
+	fi
+
+	local version; version=$(printf '%s' "$out" | jq -r '.version')
+	local requested_json
+	if [ "$req_is_null" = 1 ]; then
+		requested_json="null"
+	else
+		requested_json=$(jq -nc --arg v "$req_val" '$v')
+	fi
+	local resolved_at; resolved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	local pinjson
+	if ! pinjson=$(jq -n \
+		--arg pkg "$pkg" \
+		--arg version "$version" \
+		--argjson requested "$requested_json" \
+		--arg resolved "$resolved_at" \
+		--slurpfile rec <(printf '%s' "$out") \
+		'{schema:1, package:$pkg, version:$version, requested:$requested,
+		  resolved_at:$resolved, artifacts:($rec[0].artifacts)}'); then
+		spm_die "lock: failed to build pin for $pkg" 1
+	fi
+	if ! printf '%s\n' "$pinjson" | spm_write_pin "$pkg"; then
+		# Validation/write failed: the previous pin (if any) is retained. (§6)
+		spm_die "lock: invalid pin produced for $pkg" 1
+	fi
+	local shown
+	if [ "$req_is_null" = 1 ]; then shown="latest"; else shown="$req_val"; fi
+	spm_log "lock: updated $pkg to $version (requested=$shown)"
+	return 0
+}
+
+# lock update [pkg[@ver]...] -- §12.
+spm_lock_update() {
+	local -a pkgs=()
+	if [ $# -gt 0 ]; then
+		pkgs=("$@")
+	else
+		if [ -d "$SPM_ROOT/packages" ]; then
+			mapfile -t pkgs < <(find -L "$SPM_ROOT/packages" -mindepth 1 -maxdepth 1 -type d \
+				-printf '%f\n' 2>/dev/null | sort)
+		fi
+		if [ "${#pkgs[@]}" -eq 0 ]; then
+			spm_warn "lock update: no recipes found in $SPM_ROOT/packages"
+			return 0
+		fi
+	fi
+	local rc=0 p
+	for p in "${pkgs[@]}"; do
+		spm_lock_one "$p" || rc=1
+	done
+	return "$rc"
+}
+
+# lock show -- Phase 3 (not implemented yet).
+spm_lock_show() {
+	spm_die "lock show is not implemented yet" 1
+}
+
+spm_lock_main() {
+	local subcmd="${1-}"
+	[ $# -gt 0 ] || { spm_err "usage: static-pkgmgr lock update|show [pkg...]"; exit 2; }
+	shift
+	case "$subcmd" in
+		update) spm_lock_update "$@" ;;
+		show) spm_lock_show "$@" ;;
+		*) spm_err "usage: static-pkgmgr lock update|show [pkg...]"; exit 2 ;;
+	esac
+}

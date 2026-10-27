@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck jq curl
+      - name: shellcheck
+        run: |
+          find bin lib helpers tests -type f -name '*.sh' -exec shellcheck -x {} +
+          shellcheck -x bin/static-pkgmgr
+      - name: tests
+        run: |
+          export SPM_TEST_MODE=1
+          bash tests/run.sh

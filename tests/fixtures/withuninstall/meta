@@ -1,0 +1,3 @@
+NAME=withuninstall
+DESCRIPTION=fixture with an uninstall.sh hook
+HOMEPAGE=https://example.invalid/withuninstall

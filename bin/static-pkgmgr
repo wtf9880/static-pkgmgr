@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# static-pkgmgr -- user-level static app package manager.
+# §12 entry point: global getopt, then subcommand dispatch.
+set -Eeuo pipefail
+
+# Resolve the repository root by following this script's real path.
+# bin/static-pkgmgr -> repo root (two dirname levels).
+SPM_ROOT=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
+export SPM_ROOT
+
+# shellcheck source=lib/common.sh
+. "$SPM_ROOT/lib/common.sh"
+# shellcheck source=lib/config.sh
+. "$SPM_ROOT/lib/config.sh"
+# shellcheck source=lib/manifest.sh
+. "$SPM_ROOT/lib/manifest.sh"
+# shellcheck source=lib/lock.sh
+. "$SPM_ROOT/lib/lock.sh"
+# shellcheck source=lib/install.sh
+. "$SPM_ROOT/lib/install.sh"
+# shellcheck source=lib/uninstall.sh
+. "$SPM_ROOT/lib/uninstall.sh"
+
+export SPM_DRY_RUN=0
+SPM_SAFE_UPGRADE_OVERRIDE=""
+
+_spm_version() {
+	printf 'static-pkgmgr 0.1.0\n'
+}
+
+_spm_help() {
+	cat <<'EOF'
+usage: static-pkgmgr [global options] <command> [args]
+
+global options:
+  -h, --help              show help
+  -V, --version           show version
+  -n, --dry-run           print the plan, change nothing
+      --safe-upgrade      upgrade with staged swap (overrides config)
+      --no-safe-upgrade   upgrade in place (overrides config)
+
+commands:
+  lock update [pkg[@ver]] resolve pins for all packages, or for one
+  lock show [pkg...]      desired vs installed version, with status
+  install <pkg>...        fresh install; error if already installed
+  upgrade [pkg...]        upgrade installed packages whose pin differs
+  uninstall <pkg>...      remove links, uninstall.sh if present, app dir
+  list                    installed packages: name, version, path
+EOF
+}
+
+# Parse the global options. Leaves the subcommand (if any) as SPM_SUBCOMMAND
+# and the remaining positional arguments in $@.
+# The leading '+' in -o causes getopt to stop at the first non-option (the
+# subcommand), so subcommand arguments are never mistaken for globals.
+_spm_parse_globals() {
+	local parsed
+	if ! parsed=$(getopt -o '+hVn' -l 'help,version,dry-run,safe-upgrade,no-safe-upgrade' -n static-pkgmgr -- "$@"); then
+		_spm_help >&2
+		exit 2
+	fi
+	# getopt output is shell-safe and is reconstructed with eval. This is the
+	# standard, sanctioned getopt consumption idiom; it is NOT config, a pin, a
+	# recipe, or network data, so the eval prohibition does not apply.
+	# shellcheck disable=SC2086
+	eval "set -- $parsed"
+	SPM_SUBCOMMAND=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-h|--help) _spm_help; exit 0 ;;
+			-V|--version) _spm_version; exit 0 ;;
+			-n|--dry-run) SPM_DRY_RUN=1; shift ;;
+			--safe-upgrade) SPM_SAFE_UPGRADE_OVERRIDE=1; shift ;;
+			--no-safe-upgrade) SPM_SAFE_UPGRADE_OVERRIDE=0; shift ;;
+			--) shift; break ;;
+			*) spm_err "static-pkgmgr: unexpected option: $1" >&2; _spm_help >&2; exit 2 ;;
+		esac
+	done
+	if [ $# -gt 0 ]; then
+		SPM_SUBCOMMAND="$1"
+		shift
+	else
+		spm_err "static-pkgmgr: no command given" >&2
+		_spm_help >&2
+		exit 2
+	fi
+	# `set --` above only reorders the positional parameters of this function,
+	# not the caller's. Propagate the remaining subcommand arguments so the
+	# dispatch below receives them correctly.
+	SPM_ARGS=("$@")
+}
+
+_spm_parse_globals "$@"
+
+# Apply --safe-upgrade / --no-safe-upgrade (CLI flag > config > default).
+case "$SPM_SAFE_UPGRADE_OVERRIDE" in
+	1) SAFE_UPGRADE=1 ;;
+	0) SAFE_UPGRADE=0 ;;
+esac
+export SAFE_UPGRADE
+
+case "$SPM_SUBCOMMAND" in
+	lock) spm_lock_main "${SPM_ARGS[@]}" ;;
+	install) spm_cmd_install "${SPM_ARGS[@]}" ;;
+	upgrade)
+		# Phase 3.
+		spm_warn "command 'upgrade' is not implemented yet"
+		exit 1
+		;;
+	uninstall) spm_cmd_uninstall "${SPM_ARGS[@]}" ;;
+	list|sync)
+		# Phase 3.
+		spm_warn "command '$SPM_SUBCOMMAND' is not implemented yet"
+		exit 1
+		;;
+	*)
+		spm_err "static-pkgmgr: unknown command '$SPM_SUBCOMMAND'" >&2
+		_spm_help >&2
+		exit 2
+		;;
+esac
