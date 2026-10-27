@@ -37,7 +37,8 @@ static-pkgmgr/
 │   ├── txn.sh                 # global flock, pending markers, recovery, cleanup
 │   ├── install.sh             # install, upgrade (in-place and safe), uninstall
 │   ├── manifest.sh            # .spm/ read/write, link checks
-│   └── recipe.sh              # load meta, run lock.sh/install.sh/uninstall.sh with env
+│   ├── recipe.sh              # load meta, run lock.sh/install.sh/uninstall.sh with env
+│   └── sync.sh                # Phase 5: sync baseline lock repo, fill missing pins
 ├── helpers/                   # packager-facing API, stable
 │   ├── github.sh              # spm_github_find_asset
 │   ├── git.sh                 # spm_git_latest_tag
@@ -85,6 +86,7 @@ Updating recipes means running `git pull` in the clone.
 
 ```text
 ~/.config/static-pkgmgr/
+├── baseline/            # Phase 5: shallow git checkout of BASELINE_REPO (§4.1)
 ├── config.env          # user settings (section 5), optional
 ├── locks/              # desired pins, one JSON file per package (section 6)
 │   ├── nodejs.json
@@ -94,7 +96,7 @@ Updating recipes means running `git pull` in the clone.
 └── spm.flock           # global mutex for mutating commands
 ```
 
-Phase 5 adds `baseline/` and `index.json` for synced baseline locks.
+Phase 5 adds `baseline/` for synced baseline locks: a shallow git checkout of `BASELINE_REPO` whose `locks/<pkg>.json` files are schema-1 pins with `requested: null`. `index.json` is intentionally not part of the design (git already tracks what changed).
 
 ### 4.2 Installed apps: `$APPS_DIR` (default `~/.local/opt`)
 
@@ -144,6 +146,7 @@ Keys:
 | `SAFE_UPGRADE` | `0` | `0`, `1` | upgrade mode (section 11) |
 | `LOG_KEEP` | `20` | integer ≥ 1 | number of log files kept |
 | `GITHUB_TOKEN` | empty | string | used by `helpers/github.sh`. The environment variable `GITHUB_TOKEN` takes precedence. |
+| `BASELINE_REPO` | empty | git URL: `https://`, `git@`, `ssh://`, `git://`; `file://` only with `SPM_TEST_MODE=1` | git repository providing baseline pins for `sync`; an empty value disables `sync` (exits 1) |
 
 Precedence, highest first: command-line flag, then `config.env`, then built-in default. The only environment variables read are `GITHUB_TOKEN` and `SPM_CONFIG_DIR`.
 
@@ -293,9 +296,9 @@ Fallback for uninstall when `.spm/links` is missing: scan `$BIN_DIR` for symlink
 
 ## 10. Transactions and crash safety
 
-Global mutex: each mutating command (`install`, `upgrade`, `uninstall`, `lock update`) takes `flock -n` on `$SPM_CONFIG_DIR/spm.flock`. If it's busy, exit 3 with "another static-pkgmgr operation is running".
+Global mutex: each mutating command (`install`, `upgrade`, `uninstall`, `lock update`, `sync`) takes `flock -n` on `$SPM_CONFIG_DIR/spm.flock`. If it's busy, exit 3 with "another static-pkgmgr operation is running".
 
-Pending marker: `pending/<pkg>`, created before the first change under `$APPS_DIR` or `$BIN_DIR` for that package. It contains `op=`, `mode=`, and `started=`. It is removed only after the operation succeeds, or after cleanup on failure succeeds.
+Pending marker: `pending/<pkg>`, created before the first change under `$APPS_DIR` or `$BIN_DIR` for that package. It contains `op=`, `mode=`, and `started=`. It is removed only after the operation succeeds, or after cleanup on failure succeeds. A command that does not touch `$APPS_DIR` or `$BIN_DIR` (such as `sync`) takes the lock but writes no marker.
 
 Recovery: if `pending/<pkg>` exists when an operation on `<pkg>` starts, the core recovers first:
 
@@ -373,7 +376,7 @@ Commands:
   upgrade [pkg...]        upgrade installed packages whose pin differs
   uninstall <pkg>...      remove links, uninstall.sh if present, app dir
   list                    installed packages: name, version, path
-  sync                    phase 5, optional
+  sync [pkg...]           fill missing pins from the baseline lock repo (§4.1)
 ```
 
 Argument parsing:
@@ -390,6 +393,7 @@ Argument semantics:
 - `lock update` with no arguments: all recipes in `packages/`.
 - `install pkg`: if no pin exists, run the resolve step first, then install. If the package is already installed, exit 1 with "already installed, use upgrade".
 - `upgrade`: does not run `lock.sh`. For each installed package, compare the pin with the installed state. Compare both `version` and `artifacts[<arch>].sha256`, so a re-published artifact with the same version also counts as an upgrade. Packages with no pin are skipped with a warning. Naming a package with no pin is an error.
+- `sync`: refreshes the baseline lock repo (`git fetch` + check out `HEAD`) into `$SPM_CONFIG_DIR/baseline/`, then writes `locks/<pkg>.json` for every package `pkg` in `baseline/locks/` (or each `pkg` named on the command line) that has no existing local pin, has a matching recipe in `packages/<pkg>/`, and whose baseline pin validates (§6). A named package not present in the baseline is an error. A baseline pin whose package has no recipe is skipped with a warning. `sync` takes the global `flock` but writes no pending marker (it does not touch `$APPS_DIR` or `$BIN_DIR`) and never runs `lock.sh`. A per-package pin-validation failure does not stop the remaining packages; the command exits 1 if any package failed. `--dry-run` fetches the baseline and prints the plan without writing any pin. If the fetch fails, `sync` exits 1 and writes nothing.
 - `lock show` status values: `up-to-date`, `upgrade`, `not installed`, `no pin`.
 
 Exit codes: `0` success, `1` error, `2` usage error, `3` busy (the global mutex is held).
@@ -419,7 +423,7 @@ Exit codes: `0` success, `1` error, `2` usage error, `3` busy (the global mutex 
 - Never `eval` anything from config, pins, recipes, or the network. Read JSON with `jq`.
 - Validate names and values. `requested` must match `^[A-Za-z0-9._+-]+$`. Package names must match the rule in section 7.1.
 - Never use `sudo`.
-- `spm_safe_rm` refuses any path outside `$APPS_DIR`, `$BIN_DIR`, `$SPM_CONFIG_DIR/pending`, or `.staging`.
+- `spm_safe_rm` refuses any path outside `$APPS_DIR`, `$BIN_DIR`, `$SPM_CONFIG_DIR/pending`, `$SPM_CONFIG_DIR/baseline`, or `.staging`.
 
 ## 15. Implementation phases
 
@@ -430,7 +434,7 @@ Each phase is a separate session with its own review. Do not start a phase befor
 - **Phase 2, transactions.** Global `flock`. Pending markers. Recovery. Cleanup on failure and on signals. Tests that simulate a crash by killing the process mid-install.
 - **Phase 3, upgrades.** `upgrade` (in-place and safe), `--safe-upgrade` and `--no-safe-upgrade`, `SAFE_UPGRADE` in config, `lock show`, `list`, `--dry-run`.
 - **Phase 4, helpers and real recipes.** `helpers/github.sh`, `git.sh`, `http.sh`, `checksums.sh`, `artifact.sh`, `link.sh`. Recipes for `nodejs` and `ripgrep`. `CONTRIBUTING.md`.
-- **Phase 5, optional.** `sync` and the baseline lock repo, `baseline/`, `index.json`.
+- **Phase 5, optional.** `sync` and the baseline lock repo (`baseline/`, `BASELINE_REPO` in §5): `sync` fetches a shallow checkout and fills missing local pins from `baseline/locks/<pkg>.json`. `index.json` is intentionally not part of the design (git already tracks what changed).
 
 ## 16. Open questions
 

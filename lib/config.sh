@@ -53,6 +53,7 @@ spm_get_kv() {
 #   SAFE_UPGRADE    0 or 1 (config.env or default 0)
 #   LOG_KEEP        integer >= 1 (config.env or default 20)
 #   GITHUB_TOKEN    string (env var takes precedence over config.env, §5)
+#   BASELINE_REPO   git URL for `sync` (config.env or default empty; §5/§12)
 spm_load_config() {
 	# SPM_CONFIG_DIR comes from the environment, or the built-in default.
 	if [ -z "${SPM_CONFIG_DIR:-}" ]; then
@@ -67,6 +68,8 @@ spm_load_config() {
 	export BIN_DIR="$HOME/.local/bin"
 	export SAFE_UPGRADE="0"
 	export LOG_KEEP="20"
+	# shellcheck disable=SC2034  # non-exported global; read by sync (lib/sync.sh), §12.
+	BASELINE_REPO=""
 
 	# GITHUB_TOKEN: the environment variable takes precedence over config.env.
 	# Remember whether it was set in the environment, and capture any value
@@ -128,6 +131,15 @@ spm_load_config() {
 				;;
 			GITHUB_TOKEN)
 				_gh_file="$value"
+				;;
+			BASELINE_REPO)
+				# shellcheck disable=SC2034  # non-exported global; read by sync (lib/sync.sh), §12.
+				case "$value" in
+					"" ) BASELINE_REPO="" ;;
+					https://*|git@*|ssh://*|git://*) BASELINE_REPO="$value" ;;
+					file://*) [ "${SPM_TEST_MODE:-0}" = "1" ] || spm_die "config: BASELINE_REPO file:// requires SPM_TEST_MODE=1"; BASELINE_REPO="$value" ;;
+					*) spm_die "config: BASELINE_REPO must be a git URL (https://, git@, ssh://, git://)" ;;
+				esac
 				;;
 			*)
 				# Unknown key: warn and ignore per §5.2.

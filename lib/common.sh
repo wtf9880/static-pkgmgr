@@ -53,7 +53,8 @@ export SPM_ARCH
 # --- safe removal ----------------------------------------------------------
 
 # Remove a path only if its real location is strictly inside one of the
-# allowed roots: $APPS_DIR, $BIN_DIR, or $SPM_CONFIG_DIR/pending.
+# allowed roots: $APPS_DIR, $BIN_DIR, $SPM_CONFIG_DIR/pending, or
+# $SPM_CONFIG_DIR/baseline (Phase 5, for stale baseline cleanup).
 # Refuses anything else (and refuses the roots themselves) per §14/D6.
 #
 # The target path is removed as given (so a symlink is unlinked, not its
@@ -79,7 +80,7 @@ spm_safe_rm() {
 	local -a roots=()
 	[ -n "${APPS_DIR:-}" ] && roots+=("$APPS_DIR")
 	[ -n "${BIN_DIR:-}" ] && roots+=("$BIN_DIR")
-	[ -n "${SPM_CONFIG_DIR:-}" ] && roots+=("$SPM_CONFIG_DIR/pending")
+	[ -n "${SPM_CONFIG_DIR:-}" ] && roots+=("$SPM_CONFIG_DIR/pending" "$SPM_CONFIG_DIR/baseline")
 
 	for ((i = 0; i < ${#roots[@]}; i++)); do
 		r="${roots[$i]}"

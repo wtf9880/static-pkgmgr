@@ -73,10 +73,10 @@ spm_eq_int "$SPM_CODE" 0
 spm_run bash "$BIN" lock show
 spm_eq_int "$SPM_CODE" 0
 
-# sync is Phase 5.
+# sync is Phase 5: without BASELINE_REPO configured, it exits 1 "not set".
 spm_run bash "$BIN" sync
 spm_eq_int "$SPM_CODE" 1
-spm_contains "$SPM_ERR" "not implemented"
+spm_contains "$SPM_ERR" "BASELINE_REPO"
 
 # --- global flags are accepted (parsed) before the subcommand --------------
 # -n/--dry-run are parsed as globals (§12). For a package with no recipe,
