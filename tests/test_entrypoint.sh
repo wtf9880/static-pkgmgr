@@ -63,21 +63,24 @@ spm_run bash "$BIN" uninstall frobnicate
 spm_eq_int "$SPM_CODE" 1
 spm_contains "$SPM_ERR" "is not installed"
 
-# --- still-unimplemented subcommands (Phase 3) exit 1 ----------------------
-for cmd in upgrade list sync; do
-	spm_run bash "$BIN" "$cmd"
-	spm_eq_int "$SPM_CODE" 1
-	spm_contains "$SPM_ERR" "not implemented"
-done
-
-# lock show is Phase 3.
+# --- Phase 3: upgrade, list, and lock show are real commands ---------------
+# They run against the bare repo (no installed apps, no pins), so they succeed
+# with empty output rather than reaching a "not implemented" stub.
+spm_run bash "$BIN" upgrade
+spm_eq_int "$SPM_CODE" 0
+spm_run bash "$BIN" list
+spm_eq_int "$SPM_CODE" 0
 spm_run bash "$BIN" lock show
+spm_eq_int "$SPM_CODE" 0
+
+# sync is Phase 5.
+spm_run bash "$BIN" sync
 spm_eq_int "$SPM_CODE" 1
 spm_contains "$SPM_ERR" "not implemented"
 
 # --- global flags are accepted (parsed) before the subcommand --------------
-# -n/--dry-run are parsed as globals; the subcommand then runs (Phase 1 does
-# not yet act on --dry-run, so install still tries and errors on no recipe).
+# -n/--dry-run are parsed as globals (§12). For a package with no recipe,
+# install errors before any mutation, so dry-run still exits 1 here.
 spm_run bash "$BIN" -n install frobnicate
 spm_eq_int "$SPM_CODE" 1
 spm_run bash "$BIN" --dry-run install frobnicate

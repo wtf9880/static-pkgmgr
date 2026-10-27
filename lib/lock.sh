@@ -142,6 +142,13 @@ spm_lock_one() {
 		  resolved_at:$resolved, artifacts:($rec[0].artifacts)}'); then
 		spm_die "lock: failed to build pin for $pkg" 1
 	fi
+	# §12: dry-run resolves the pin (read-only) but writes nothing.
+	if [ "$SPM_DRY_RUN" = 1 ]; then
+		local shown
+		if [ "$req_is_null" = 1 ]; then shown="latest"; else shown="$req_val"; fi
+		spm_log "lock: would update pin for $pkg to $version (requested=$shown) (dry-run)"
+		return 0
+	fi
 	if ! printf '%s\n' "$pinjson" | spm_write_pin "$pkg"; then
 		# Validation/write failed: the previous pin (if any) is retained. (§6)
 		spm_die "lock: invalid pin produced for $pkg" 1
@@ -174,9 +181,49 @@ spm_lock_update() {
 	return "$rc"
 }
 
-# lock show -- Phase 3 (not implemented yet).
+# lock show [pkg...] -- §12. Read-only: prints "<pkg>\t<desired>\t<installed>\t<status>"
+# for each named package, or for every pinned package when none are named.
+# Status: up-to-date | upgrade | not installed | no pin.
 spm_lock_show() {
-	spm_die "lock show is not implemented yet" 1
+	local -a pkgs=()
+	if [ $# -gt 0 ]; then
+		pkgs=("$@")
+	else
+		if [ -d "$SPM_CONFIG_DIR/locks" ]; then
+			mapfile -t pkgs < <(find "$SPM_CONFIG_DIR/locks" -mindepth 1 -maxdepth 1 \
+				-name '*.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | sort)
+		fi
+	fi
+	local pkg pin pkgdir inst desired installed status
+	for pkg in "${pkgs[@]}"; do
+		if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+			spm_warn "lock show: invalid package name: $pkg"
+			continue
+		fi
+		pin="$SPM_CONFIG_DIR/locks/$pkg.json"
+		pkgdir="$APPS_DIR/$pkg"
+		inst="$pkgdir/.spm/lock.json"
+		if [ ! -f "$pin" ]; then
+			desired="-"; installed="-"; status="no pin"
+		elif ! [ -e "$pkgdir" ] && [ ! -L "$pkgdir" ]; then
+			desired=$(jq -r '.version' "$pin")
+			installed="-"; status="not installed"
+		else
+			desired=$(jq -r '.version' "$pin")
+			if [ -f "$inst" ]; then
+				installed=$(jq -r '.version' "$inst")
+			else
+				installed="-"
+			fi
+			if spm_installed_matches_pin "$pkg" "$pin"; then
+				status="up-to-date"
+			else
+				status="upgrade"
+			fi
+		fi
+		printf '%s\t%s\t%s\t%s\n' "$pkg" "$desired" "$installed" "$status"
+	done
+	return 0
 }
 
 spm_lock_main() {

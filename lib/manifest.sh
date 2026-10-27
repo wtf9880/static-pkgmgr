@@ -126,3 +126,46 @@ spm_remove_links() {
 		fi
 	done < <(find "$BIN_DIR" -maxdepth 1 -type l -print0 2>/dev/null)
 }
+
+# Return 0 if the installed copy of <pkg> matches the desired pin <pinfile>:
+# both the version string and the per-architecture sha256 must be equal. A
+# missing app dir or .spm/lock.json, or a missing pin, is "not matching" (1).
+# (§12 upgrade comparison, reused by `lock show`.)
+spm_installed_matches_pin() {
+	local pkg="$1" pin="$2"
+	[ -f "$pin" ] || return 1
+	local pkgdir="$APPS_DIR/$pkg"
+	local inst="$pkgdir/.spm/lock.json"
+	[ -f "$inst" ] || return 1
+	local iv dv isha dsha
+	iv=$(jq -r '.version' "$inst")
+	dv=$(jq -r '.version' "$pin")
+	[ "$iv" = "$dv" ] || return 1
+	isha=$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256 // ""' "$inst")
+	dsha=$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256 // ""' "$pin")
+	[ "$isha" = "$dsha" ]
+}
+
+# list -- §12. Read-only: prints installed packages as
+# "<name>\t<version>\t<path>". (§9 installed state.)
+spm_cmd_list() {
+	local pkgdir pkg ver inst
+	if [ ! -d "$APPS_DIR" ]; then
+		return 0
+	fi
+	# Skip hidden infrastructure dirs such as .staging (package names never
+	# start with ".", §7.1); they are not installed applications.
+	while IFS= read -r -d '' pkgdir; do
+		pkg=$(basename "$pkgdir")
+		inst="$pkgdir/.spm/lock.json"
+		if [ -f "$inst" ]; then
+			ver=$(jq -r '.version // "-" ' "$inst" 2>/dev/null)
+			[ -n "$ver" ] && [ "$ver" != "null" ] || ver="-"
+		else
+			ver="-"
+		fi
+		printf '%s\t%s\t%s\n' "$pkg" "$ver" "$pkgdir"
+	done < <(find "$APPS_DIR" -mindepth 1 -maxdepth 1 -type d -not -name '.*' \
+		-print0 2>/dev/null | sort -z)
+	return 0
+}

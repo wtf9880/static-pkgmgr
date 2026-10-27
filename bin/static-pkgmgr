@@ -20,6 +20,8 @@ export SPM_ROOT
 . "$SPM_ROOT/lib/install.sh"
 # shellcheck source=lib/uninstall.sh
 . "$SPM_ROOT/lib/uninstall.sh"
+# shellcheck source=lib/txn.sh
+. "$SPM_ROOT/lib/txn.sh"
 
 export SPM_DRY_RUN=0
 SPM_SAFE_UPGRADE_OVERRIDE=""
@@ -46,6 +48,7 @@ commands:
   upgrade [pkg...]        upgrade installed packages whose pin differs
   uninstall <pkg>...      remove links, uninstall.sh if present, app dir
   list                    installed packages: name, version, path
+  sync                    phase 5, optional (baseline lock repo)
 EOF
 }
 
@@ -99,18 +102,30 @@ case "$SPM_SAFE_UPGRADE_OVERRIDE" in
 esac
 export SAFE_UPGRADE
 
+# §10.1/§10.8: only mutating commands take the global lock, sweep leftover
+# .staging/*, and install signal/ERR traps. `lock show`, `list`, and `sync`
+# are read-only and must not take the lock. `--dry-run` ("print the plan,
+# change nothing", §12) makes a command non-mutating, so it skips the lock
+# and the staging sweep too -- otherwise a dry run would delete .staging/*
+# (§10.8) and block concurrent operations.
+_spm_mutating=0
+case "$SPM_SUBCOMMAND" in
+	install|upgrade|uninstall) _spm_mutating=1 ;;
+	lock) [ "${SPM_ARGS[0]:-}" = "update" ] && _spm_mutating=1 ;;
+esac
+if [ "$_spm_mutating" = 1 ] && [ "$SPM_DRY_RUN" = 0 ]; then
+	spm_begin_txn
+fi
+
 case "$SPM_SUBCOMMAND" in
 	lock) spm_lock_main "${SPM_ARGS[@]}" ;;
 	install) spm_cmd_install "${SPM_ARGS[@]}" ;;
-	upgrade)
-		# Phase 3.
-		spm_warn "command 'upgrade' is not implemented yet"
-		exit 1
-		;;
+	upgrade) spm_cmd_upgrade "${SPM_ARGS[@]}" ;;
 	uninstall) spm_cmd_uninstall "${SPM_ARGS[@]}" ;;
-	list|sync)
-		# Phase 3.
-		spm_warn "command '$SPM_SUBCOMMAND' is not implemented yet"
+	list) spm_cmd_list ;;
+	sync)
+		# Phase 5.
+		spm_warn "command 'sync' is not implemented yet"
 		exit 1
 		;;
 	*)
@@ -119,3 +134,10 @@ case "$SPM_SUBCOMMAND" in
 		exit 2
 		;;
 esac
+
+# Success path: release the lock and restore default traps (mutating commands
+# only; read-only commands and dry runs never took the lock).
+if [ "$_spm_mutating" = 1 ] && [ "$SPM_DRY_RUN" = 0 ]; then
+	spm_end_txn
+fi
+exit 0
