@@ -46,12 +46,51 @@ spm_run bash "$BIN" lock update helloapp
 spm_eq_int "$SPM_CODE" 0
 spm_true "keep did not preserve requested" jq -e '.requested == "9.9.9"' "$pin"
 
-# --- lock update with no args locks all recipes --------------------------
+# --- lock update --all locks all recipes ----------------------------------
 rm -f "$SPM_CONFIG_DIR/locks"/*.json
+spm_run bash "$BIN" lock update --all
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_ERR" "updated helloapp"
+spm_true "lock update --all did not write helloapp pin" test -f "$pin"
+
+# --- lock update (no args) refreshes existing pins (Option B default) -------
+# helloapp pin exists from the --all test above: the no-arg default must refresh
+# that existing pin (not enumerate recipes).
 spm_run bash "$BIN" lock update
 spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_ERR" "updated helloapp"
-spm_true "lock update (all) did not write helloapp pin" test -f "$pin"
+spm_true "default lock update did not refresh helloapp pin" test -f "$pin"
+
+# --- default scope: a pinned package with no recipe is skipped (non-fatal) --
+# foo has a pin but no recipe under packages/; the no-arg default must warn and
+# skip it (exit 0) rather than hard-failing on "no recipe".
+rm -f "$SPM_CONFIG_DIR/locks"/*.json
+jq -nc --arg pkg foo \
+	'{schema:1,package:$pkg,version:"1.0.0",requested:null,resolved_at:"x",artifacts:{}}' \
+	> "$SPM_CONFIG_DIR/locks/foo.json"
+spm_run bash "$BIN" lock update
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_ERR" "no recipe for foo (skipped)"
+
+# --- lock update --installed refreshes installed+pinned apps ---------------
+# Re-seed the helloapp pin and mark it installed under APPS_DIR (no .spm needed:
+# --installed selects $APPS_DIR/<pkg> dirs that already have a local pin).
+spm_run bash "$BIN" lock update --all >/dev/null 2>&1 || true
+mkdir -p "$APPS_DIR/helloapp"
+spm_run bash "$BIN" lock update --installed
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_ERR" "updated helloapp"
+rm -rf "$APPS_DIR/helloapp"
+
+# --- --all/--installed mutual exclusivity + pkg-arg conflicts (exit 2) -----
+spm_run bash "$BIN" lock update --all --installed
+spm_eq_int "$SPM_CODE" 2
+spm_contains "$SPM_ERR" "mutually exclusive"
+spm_run bash "$BIN" lock update --all helloapp
+spm_eq_int "$SPM_CODE" 2
+spm_contains "$SPM_ERR" "cannot be combined with package names"
+spm_run bash "$BIN" lock update --installed helloapp
+spm_eq_int "$SPM_CODE" 2
 
 # --- invalid requested version is rejected --------------------------------
 spm_run bash "$BIN" lock update helloapp@v/invalid

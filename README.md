@@ -71,8 +71,8 @@ nix develop            # shell with shellcheck, git, jq, unzip
 ## Quick start
 
 ```sh
-# Resolve pins for everything shipped under packages/ (writes locks/*.json).
-SPM_TEST_MODE=1 static-pkgmgr lock update
+# Resolve pins for every recipe in packages/ (writes locks/*.json).
+SPM_TEST_MODE=1 static-pkgmgr lock update --all
 
 # Install a package.
 static-pkgmgr install ripgrep
@@ -94,7 +94,7 @@ static-pkgmgr uninstall ripgrep
 
 | command | description |
 | --- | --- |
-| `lock update [pkg[@ver]]` | Resolve and write pins for all packages, or for one (`pkg`, `pkg@1.2.3`, or `pkg@latest`). |
+| `lock update [--all|--installed] [pkg[@ver]]` | Resolve or refresh pins: no args refreshes every package with an existing pin (`locks/<pkg>.json`); `--all` resolves all recipes in `packages/`; `--installed` refreshes installed apps that already have a pin; named packages (`pkg`, `pkg@1.2.3`, `pkg@latest`) resolve one. `--all`/`--installed` are mutually exclusive with each other and with named packages (usage error, exit 2). |
 | `lock show [pkg...]` | Show desired vs. installed version with status: `up-to-date`, `upgrade`, `not installed`, `no pin`. |
 | `install <pkg...>` | Fresh install; errors if a package is already installed. |
 | `upgrade [pkg...]` | Upgrade installed packages whose pin differs from what is installed. |

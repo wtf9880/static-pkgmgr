@@ -44,7 +44,7 @@ global options:
       --no-safe-upgrade   upgrade in place (overrides config)
 
 commands:
-  lock update [pkg[@ver]] resolve pins for all packages, or for one
+  lock update [--all|--installed] [pkg[@ver]] resolve or refresh pins
   lock show [pkg...]      desired vs installed version, with status
   install <pkg>...        fresh install; error if already installed
   upgrade [pkg...]        upgrade installed packages whose pin differs

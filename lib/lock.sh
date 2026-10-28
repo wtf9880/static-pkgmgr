@@ -159,27 +159,85 @@ spm_lock_one() {
 	return 0
 }
 
-# lock update [pkg[@ver]...] -- §12.
+# lock update [--all|--installed] [pkg[@ver]...] -- §12.
+# Scope selection (mutually exclusive): named packages; --all (every recipe in
+# packages/); --installed (apps under $APPS_DIR/<pkg> with an existing pin);
+# or, with no arguments, every package with an existing local pin (locks/<pkg>.json).
 spm_lock_update() {
+	local parsed
+	if ! parsed=$(getopt -o '' -l 'all,installed' -n static-pkgmgr -- "$@"); then
+		spm_err "usage: static-pkgmgr lock update [--all|--installed] [pkg[@ver]]" >&2
+		return 2
+	fi
+	# shellcheck disable=SC2086  # getopt shell-quoted output; standard idiom (§14 D7).
+	eval "set -- $parsed"
 	local -a pkgs=()
-	if [ $# -gt 0 ]; then
-		pkgs=("$@")
-	else
+	local all=0 installed=0 explicit=0
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--all) all=1 ;;
+			--installed) installed=1 ;;
+			--) ;;
+			*) pkgs+=("$1") ;;
+		esac
+		shift
+	done
+	if [ "$all" -eq 1 ] && [ "$installed" -eq 1 ]; then
+		spm_err "lock update: --all and --installed are mutually exclusive" >&2
+		return 2
+	fi
+	if { [ "$all" -eq 1 ] || [ "$installed" -eq 1 ]; } && [ "${#pkgs[@]}" -gt 0 ]; then
+		spm_err "lock update: --all/--installed cannot be combined with package names" >&2
+		return 2
+	fi
+	if [ "${#pkgs[@]}" -gt 0 ]; then explicit=1; fi
+	local -a targets=()
+	if [ "$explicit" -eq 1 ]; then
+		# Named packages: resolve exactly those (existing behavior).
+		targets=("${pkgs[@]}")
+	elif [ "$all" -eq 1 ]; then
 		if [ -d "$SPM_ROOT/packages" ]; then
-			# §12 "all packages": a directory without lock.sh+meta is not a
-			# package (e.g. a test double like fakebin in tests/fixtures) and is
-			# skipped rather than aborting the whole lock update.
-			mapfile -t pkgs < <(find -L "$SPM_ROOT/packages" -mindepth 1 -maxdepth 1 -type d \
+			# §12 "all" set: a directory without lock.sh+meta is not a package.
+			mapfile -t targets < <(find -L "$SPM_ROOT/packages" -mindepth 1 -maxdepth 1 -type d \
 				-exec test -f '{}/lock.sh' \; -exec test -f '{}/meta' \; \
 				-printf '%f\n' 2>/dev/null | sort)
 		fi
-		if [ "${#pkgs[@]}" -eq 0 ]; then
+		if [ "${#targets[@]}" -eq 0 ]; then
 			spm_warn "lock update: no recipes found in $SPM_ROOT/packages"
 			return 0
 		fi
+	elif [ "$installed" -eq 1 ]; then
+		# Installed apps that already have a local pin (Option B: --installed).
+		if [ -d "$APPS_DIR" ]; then
+			local p
+			while IFS= read -r -d '' d; do
+				p="${d##*/}"
+				[ -n "$p" ] || continue
+				[ -f "$SPM_CONFIG_DIR/locks/$p.json" ] && targets+=("$p")
+			done < <(find "$APPS_DIR" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+		fi
+	else
+		# Default (no flags, no packages): every package with an existing pin.
+		if [ -d "$SPM_CONFIG_DIR/locks" ]; then
+			mapfile -t targets < <(find "$SPM_CONFIG_DIR/locks" -mindepth 1 -maxdepth 1 \
+				-name '*.json' -printf '%f\n' 2>/dev/null | sed 's/\.json$//' | sort)
+		fi
 	fi
-	local rc=0 p
-	for p in "${pkgs[@]}"; do
+	if [ "${#targets[@]}" -eq 0 ]; then
+		spm_warn "lock update: nothing to resolve"
+		return 0
+	fi
+	local rc=0 p recipe
+	for p in "${targets[@]}"; do
+		# Scope-based selection: a missing recipe is a non-fatal skip. Named
+		# packages get the hard "no recipe" error from spm_lock_one (§12).
+		if [ "$explicit" -eq 0 ]; then
+			recipe="$SPM_ROOT/packages/$p"
+			if [ ! -d "$recipe" ] || [ ! -f "$recipe/lock.sh" ] || [ ! -f "$recipe/meta" ]; then
+				spm_warn "lock: no recipe for $p (skipped)"
+				continue
+			fi
+		fi
 		spm_lock_one "$p" || rc=1
 	done
 	return "$rc"
@@ -232,11 +290,11 @@ spm_lock_show() {
 
 spm_lock_main() {
 	local subcmd="${1-}"
-	[ $# -gt 0 ] || { spm_err "usage: static-pkgmgr lock update|show [pkg...]"; exit 2; }
+	[ $# -gt 0 ] || { spm_err "usage: static-pkgmgr lock update [--all|--installed] [pkg[@ver]] | lock show [pkg...]"; exit 2; }
 	shift
 	case "$subcmd" in
 		update) spm_lock_update "$@" ;;
 		show) spm_lock_show "$@" ;;
-		*) spm_err "usage: static-pkgmgr lock update|show [pkg...]"; exit 2 ;;
+		*) spm_err "usage: static-pkgmgr lock update [--all|--installed] [pkg[@ver]] | lock show [pkg...]"; exit 2 ;;
 	esac
 }

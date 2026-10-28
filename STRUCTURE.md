@@ -370,7 +370,7 @@ Global options:
       --no-safe-upgrade   upgrade in place (overrides config)
 
 Commands:
-  lock update [pkg[@ver]] resolve pins for all packages, or for one
+  lock update [--all|--installed] [pkg[@ver]] resolve or refresh pins
   lock show [pkg...]      desired vs installed version, with status
   install <pkg>...        fresh install; error if already installed
   upgrade [pkg...]        upgrade installed packages whose pin differs
@@ -383,6 +383,7 @@ Argument parsing:
 
 - Global options use `getopt -o hVn -l help,version,dry-run,safe-upgrade,no-safe-upgrade -n static-pkgmgr -- "$@"`, with a leading `+` in the short option string so parsing stops at the first non-option (the subcommand).
 - Each subcommand with options parses its own arguments with `getopt`.
+- `lock update` parses `--all`/`--installed` with its own `getopt -l 'all,installed' -o ''` (long options only, no short options). The two flags are mutually exclusive with each other and with named package arguments.
 - `lock` takes a subcommand (`update` or `show`) as its first positional argument.
 
 Argument semantics:
@@ -390,7 +391,10 @@ Argument semantics:
 - `lock update pkg`: resolve and keep the existing `requested` value.
 - `lock update pkg@ver`: resolve and set `requested` to `ver`.
 - `lock update pkg@latest`: resolve and set `requested` to `null`.
-- `lock update` with no arguments: all recipes in `packages/`.
+- `lock update` with no arguments: every package with an existing local pin (`locks/<pkg>.json`).
+- `lock update --all`: every recipe in `packages/` (with `lock.sh` + `meta`).
+- `lock update --installed`: every package present under `$APPS_DIR/<pkg>` that already has a local pin.
+- `--all` and `--installed` are mutually exclusive with each other and with named packages; combining them is a usage error (exit 2). For scope-based selection (`--installed` and the no-argument default), a package with no recipe is skipped with a non-fatal warning; for explicitly named packages, a missing recipe is a hard error (exit 1).
 - `install pkg`: if no pin exists, run the resolve step first, then install. If the package is already installed, exit 1 with "already installed, use upgrade".
 - `upgrade`: does not run `lock.sh`. For each installed package, compare the pin with the installed state. Compare both `version` and `artifacts[<arch>].sha256`, so a re-published artifact with the same version also counts as an upgrade. Packages with no pin are skipped with a warning. Naming a package with no pin is an error.
 - `sync`: refreshes the baseline lock repo (`git fetch` + check out `HEAD`) into `$SPM_CONFIG_DIR/baseline/`, then writes `locks/<pkg>.json` for every package `pkg` in `baseline/locks/` (or each `pkg` named on the command line) that has no existing local pin, has a matching recipe in `packages/<pkg>/`, and whose baseline pin validates (§6). A named package not present in the baseline is an error. A baseline pin whose package has no recipe is skipped with a warning. `sync` takes the global `flock` but writes no pending marker (it does not touch `$APPS_DIR` or `$BIN_DIR`) and never runs `lock.sh`. A per-package pin-validation failure does not stop the remaining packages; the command exits 1 if any package failed. `--dry-run` fetches the baseline and prints the plan without writing any pin. If the fetch fails, `sync` exits 1 and writes nothing.
