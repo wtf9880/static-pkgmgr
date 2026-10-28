@@ -66,7 +66,9 @@ spm_cmd_sync() {
 			# Git's diagnostics already reached the terminal; tidy any
 			# partial tree so the next run can retry, then abort without
 			# writing any pins. (§15: fetch/clone failure => nothing written.)
-			[ -e "$baseline" ] && _spm_clear_dir "$baseline" || true
+			if [ -e "$baseline" ]; then
+				_spm_clear_dir "$baseline" || true
+			fi
 			spm_die "sync: failed to clone baseline: $BASELINE_REPO"
 		fi
 	fi

@@ -91,7 +91,9 @@ spm_contains "$SPM_ERR" "another static-pkgmgr operation is running"
 # SIGKILL mid-install simulates a crash: the marker + staging must survive.
 recipe_pid=$(hangapp_pid)
 kill -9 "$ha_pid" 2>/dev/null || true
-[ -n "$recipe_pid" ] && kill -9 "$recipe_pid" 2>/dev/null || true
+if [ -n "$recipe_pid" ]; then
+	kill -9 "$recipe_pid" 2>/dev/null || true
+fi
 wait "$ha_pid" 2>/dev/null || true
 spm_true "marker must survive SIGKILL crash" test -f "$SPM_CONFIG_DIR/pending/hangapp"
 spm_true "staging must survive SIGKILL crash" test -d "$STAGING/hangapp"
@@ -123,7 +125,9 @@ spm_false "marker removed by SIGTERM cleanup" test -f "$SPM_CONFIG_DIR/pending/h
 spm_false "staging removed by SIGTERM cleanup" test -d "$STAGING/hangapp"
 spm_false "app absent after SIGTERM cleanup" test -e "$APPS_DIR/hangapp"
 spm_eq_int "$term_rc" 143      # 128 + SIGTERM(15)
-[ -n "$hb_recipe" ] && kill -9 "$hb_recipe" 2>/dev/null || true
+if [ -n "$hb_recipe" ]; then
+	kill -9 "$hb_recipe" 2>/dev/null || true
+fi
 # Re-install succeeds now that the sentinel exists.
 spm_run bash "$BIN" install hangapp
 spm_eq_int "$SPM_CODE" 0

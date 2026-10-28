@@ -66,8 +66,9 @@ spm_lock_one() {
 	[[ "$pkg" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \
 		|| spm_die "lock: invalid package name: $pkg" 1
 	local recipe="$SPM_ROOT/packages/$pkg"
-	[ -d "$recipe" ] && [ -f "$recipe/lock.sh" ] && [ -f "$recipe/meta" ] \
-		|| spm_die "lock: no recipe for package: $pkg" 1
+	if [ ! -d "$recipe" ] || [ ! -f "$recipe/lock.sh" ] || [ ! -f "$recipe/meta" ]; then
+		spm_die "lock: no recipe for package: $pkg" 1
+	fi
 	local name
 	name=$(spm_get_kv "$recipe/meta" NAME) || name=""
 	[ "$name" = "$pkg" ] \

@@ -157,8 +157,9 @@ spm_do_upgrade() {
 		|| spm_die "upgrade: invalid package name: $pkg" 1
 
 	local recipe="$SPM_ROOT/packages/$pkg"
-	[ -d "$recipe" ] && [ -f "$recipe/install.sh" ] && [ -f "$recipe/meta" ] \
-		|| spm_die "upgrade: no recipe for package: $pkg" 1
+	if [ ! -d "$recipe" ] || [ ! -f "$recipe/install.sh" ] || [ ! -f "$recipe/meta" ]; then
+		spm_die "upgrade: no recipe for package: $pkg" 1
+	fi
 
 	local pkgdir="$APPS_DIR/$pkg"
 	[ -e "$pkgdir" ] || [ -L "$pkgdir" ] \
