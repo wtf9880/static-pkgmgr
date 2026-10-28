@@ -85,6 +85,16 @@ case "$url" in
 			serve_archive "$fx/phase4rg.tar.gz"; exit 0
 		fi
 		;;
+	*go.dev/dl/*mode=json*)
+		if [ -n "$fx" ] && [ -f "$fx/golang-dl.json" ]; then
+			cat "$fx/golang-dl.json"; exit 0
+		fi
+		;;
+	*go.dev/dl/go*.tar.gz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4golang.tar.gz" ]; then
+			serve_archive "$fx/phase4golang.tar.gz"; exit 0
+		fi
+		;;
 esac
 
 # Unrecognised https URL: fall back to the real curl (network).

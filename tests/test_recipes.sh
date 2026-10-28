@@ -66,6 +66,32 @@ cat > "$SBX/ripgrep-releases.json" <<JSON
 ]
 JSON
 
+# golang fixture: go/bin/{go,gofmt} + go/VERSION, wrapped in a single "go/"
+# tree (the real Go tarball layout). The fake curl serves golang-dl.json
+# (go1.27.3 as the newest manifest entry) plus this archive for both arches.
+mkdir -p "$SBX/go/go/bin"
+printf '#!/usr/bin/env bash\necho "phase4 go 1.27.3 from static-pkgmgr fixture"\n' \
+	> "$SBX/go/go/bin/go"
+printf '#!/usr/bin/env bash\necho "phase4 gofmt 1.27.3 from static-pkgmgr fixture"\n' \
+	> "$SBX/go/go/bin/gofmt"
+printf 'go1.27.3\n' > "$SBX/go/go/VERSION"
+chmod +x "$SBX/go/go/bin/go" "$SBX/go/go/bin/gofmt"
+tar -C "$SBX/go" -czf "$SBX/phase4golang.tar.gz" go
+golang_sha=$(sha256sum "$SBX/phase4golang.tar.gz" | cut -d' ' -f1)
+golang_size=$(wc -c < "$SBX/phase4golang.tar.gz" | tr -d ' ')
+# Canned go.dev manifest (?mode=json): go1.27.3 with the fixture archive's real
+# sha + size for both linux arches (the fake curl serves the same bytes for
+# both, exercising the recipe's upstream-checksum path rather than TOFU).
+cat > "$SBX/golang-dl.json" <<JSON
+[
+  {"version":"go1.27.3","stable":true,"files":[
+    {"filename":"go1.27.3.linux-amd64.tar.gz","os":"linux","arch":"amd64","version":"go1.27.3","sha256":"$golang_sha","size":$golang_size,"kind":"archive"},
+    {"filename":"go1.27.3.linux-arm64.tar.gz","os":"linux","arch":"arm64","version":"go1.27.3","sha256":"$golang_sha","size":$golang_size,"kind":"archive"},
+    {"filename":"go1.27.3.src.tar.gz","os":"","arch":"","version":"go1.27.3","sha256":"0000000000000000000000000000000000000000000000000000000000000000","size":1,"kind":"source"}
+  ]}
+]
+JSON
+
 # --- isolated sandbox + test repo with nodejs + ripgrep recipes -------------
 spm_setup_test_env
 # spm_setup_test_repo makes the test repo's packages/ a symlink to
@@ -80,6 +106,7 @@ for d in "$_REAL_ROOT/tests/fixtures"/*/; do
 done
 ln -s "$_REAL_ROOT/packages/nodejs" "$SPM_TEST_ROOT/packages/nodejs"
 ln -s "$_REAL_ROOT/packages/ripgrep" "$SPM_TEST_ROOT/packages/ripgrep"
+ln -s "$_REAL_ROOT/packages/golang" "$SPM_TEST_ROOT/packages/golang"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -183,6 +210,34 @@ spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "ripgrep lock show should be up-to-date after install"
 spm_false "staging tree left after ripgrep install" test -e "$APPS_DIR/.staging/ripgrep"
+
+# --- golang: lock update -> go1.27.3 via git tags + go.dev manifest ------------
+spm_run bash "$BIN" lock update golang
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/golang.json")" "1.27.3" \
+	|| spm_fail "golang lock version should be 1.27.3"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/golang.json")" "$golang_sha" \
+	|| spm_fail "golang lock sha should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/golang.json")" "$golang_size" \
+	|| spm_fail "golang lock size should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/golang.json")" \
+	"https://go.dev/dl/go1.27.3.linux-$([ "$SPM_ARCH" = "x86_64" ] && echo amd64 || echo arm64).tar.gz" \
+	|| spm_fail "golang lock url wrong"
+
+# --- golang: install (stream extract + flatten + link) -----------------------
+spm_run bash "$BIN" install golang
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$("$BIN_DIR/go" 2>/dev/null)" "phase4 go 1.27.3 from static-pkgmgr fixture" \
+	|| spm_fail "golang install: bin/go produced wrong output"
+spm_eq "$("$BIN_DIR/gofmt" 2>/dev/null)" "phase4 gofmt 1.27.3 from static-pkgmgr fixture" \
+	|| spm_fail "golang install: bin/gofmt produced wrong output"
+spm_eq "$(jq -r '.version' "$APPS_DIR/golang/.spm/lock.json")" "1.27.3" \
+	|| spm_fail "golang install: .spm/lock.json version wrong"
+spm_run bash "$BIN" lock show golang
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_OUT" "up-to-date" \
+	|| spm_fail "golang lock show should be up-to-date after install"
+spm_false "staging tree left after golang install" test -e "$APPS_DIR/.staging/golang"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs
