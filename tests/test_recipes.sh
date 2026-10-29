@@ -92,6 +92,36 @@ cat > "$SBX/golang-dl.json" <<JSON
 ]
 JSON
 
+# gost fixture: a single "gost" binary at the top level (the real tarball
+# extracts its files directly — LICENSE, README*, gost — with no wrapper
+# directory to flatten).
+mkdir -p "$SBX/gost"
+printf '#!/usr/bin/env bash\necho "phase4 gost v2.12.0 from static-pkgmgr fixture"\n' \
+	> "$SBX/gost/gost"
+chmod +x "$SBX/gost/gost"
+tar -C "$SBX/gost" -czf "$SBX/phase4gost.tar.gz" gost
+gost_sha=$(sha256sum "$SBX/phase4gost.tar.gz" | cut -d' ' -f1)
+gost_size=$(wc -c < "$SBX/phase4gost.tar.gz" | tr -d ' ')
+# Canned GitHub releases for gost. Assets carry no digest, so the recipe reads
+# the SHA256 from the upstream checksums.txt fixture (the same real sha for
+# both arches; the fake curl serves identical archive bytes). The amd64v3
+# asset is included to confirm the recipe's asset regex does not pick it up.
+cat > "$SBX/gost-releases.json" <<JSON
+[
+  {"tag_name":"v2.12.0","name":"v2.12.0","assets":[
+    {"name":"checksums.txt","browser_download_url":"https://github.com/ginuerzh/gost/releases/download/v2.12.0/checksums.txt","digest":null},
+    {"name":"gost_2.12.0_linux_amd64.tar.gz","browser_download_url":"https://github.com/ginuerzh/gost/releases/download/v2.12.0/gost_2.12.0_linux_amd64.tar.gz","digest":null},
+    {"name":"gost_2.12.0_linux_amd64v3.tar.gz","browser_download_url":"https://github.com/ginuerzh/gost/releases/download/v2.12.0/gost_2.12.0_linux_amd64v3.tar.gz","digest":null},
+    {"name":"gost_2.12.0_linux_arm64.tar.gz","browser_download_url":"https://github.com/ginuerzh/gost/releases/download/v2.12.0/gost_2.12.0_linux_arm64.tar.gz","digest":null}]}
+]
+JSON
+# Canned gost checksums.txt: the fixture archive's real sha for both linux
+# arches (BSD `sha256 -p` style: "<sha>  <file>").
+cat > "$SBX/gost-checksums.txt" <<SHAS
+$gost_sha  gost_2.12.0_linux_amd64.tar.gz
+$gost_sha  gost_2.12.0_linux_arm64.tar.gz
+SHAS
+
 # --- isolated sandbox + test repo with nodejs + ripgrep recipes -------------
 spm_setup_test_env
 # spm_setup_test_repo makes the test repo's packages/ a symlink to
@@ -107,6 +137,7 @@ done
 ln -s "$_REAL_ROOT/packages/nodejs" "$SPM_TEST_ROOT/packages/nodejs"
 ln -s "$_REAL_ROOT/packages/ripgrep" "$SPM_TEST_ROOT/packages/ripgrep"
 ln -s "$_REAL_ROOT/packages/golang" "$SPM_TEST_ROOT/packages/golang"
+ln -s "$_REAL_ROOT/packages/gost" "$SPM_TEST_ROOT/packages/gost"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -238,6 +269,35 @@ spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "golang lock show should be up-to-date after install"
 spm_false "staging tree left after golang install" test -e "$APPS_DIR/.staging/golang"
+
+# --- gost: lock update -> resolve v2.12.0 via GitHub releases + checksums.txt --
+# gost assets carry no digest, so the recipe reads the SHA256 from the upstream
+# checksums.txt (the asset regex anchors linux_amd64 so the amd64v3 variant is
+# not selected). (§7.2)
+spm_run bash "$BIN" lock update gost
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/gost.json")" "2.12.0" \
+	|| spm_fail "gost lock version should be 2.12.0"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/gost.json")" "$gost_sha" \
+	|| spm_fail "gost lock sha should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/gost.json")" "$gost_size" \
+	|| spm_fail "gost lock size should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/gost.json")" \
+	"https://github.com/ginuerzh/gost/releases/download/v2.12.0/gost_2.12.0_linux_$([ "$SPM_ARCH" = "x86_64" ] && echo amd64 || echo arm64).tar.gz" \
+	|| spm_fail "gost lock url wrong"
+
+# --- gost: install (stream extract + link, no wrapper to flatten) ------------
+spm_run bash "$BIN" install gost
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$("$BIN_DIR/gost" 2>/dev/null)" "phase4 gost v2.12.0 from static-pkgmgr fixture" \
+	|| spm_fail "gost install: bin/gost produced wrong output"
+spm_eq "$(jq -r '.version' "$APPS_DIR/gost/.spm/lock.json")" "2.12.0" \
+	|| spm_fail "gost install: .spm/lock.json version wrong"
+spm_run bash "$BIN" lock show gost
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_OUT" "up-to-date" \
+	|| spm_fail "gost lock show should be up-to-date after install"
+spm_false "staging tree left after gost install" test -e "$APPS_DIR/.staging/gost"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs

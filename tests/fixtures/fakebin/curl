@@ -60,6 +60,11 @@ serve_archive() {
 }
 
 case "$url" in
+	*api.github.com/repos/ginuerzh/gost/releases*)
+		if [ -n "$fx" ] && [ -f "$fx/gost-releases.json" ]; then
+			cat "$fx/gost-releases.json"; exit 0
+		fi
+		;;
 	*api.github.com/repos/*/releases*)
 		if [ -n "$fx" ] && [ -f "$fx/ripgrep-releases.json" ]; then
 			cat "$fx/ripgrep-releases.json"; exit 0
@@ -83,6 +88,16 @@ case "$url" in
 	*github.com/*/releases/download/*ripgrep*.tar.gz)
 		if [ -n "$fx" ] && [ -f "$fx/phase4rg.tar.gz" ]; then
 			serve_archive "$fx/phase4rg.tar.gz"; exit 0
+		fi
+		;;
+	*github.com/ginuerzh/gost/releases/download/*/checksums.txt)
+		if [ -n "$fx" ] && [ -f "$fx/gost-checksums.txt" ]; then
+			cat "$fx/gost-checksums.txt"; exit 0
+		fi
+		;;
+	*github.com/ginuerzh/gost/releases/download/*gost*.tar.gz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4gost.tar.gz" ]; then
+			serve_archive "$fx/phase4gost.tar.gz"; exit 0
 		fi
 		;;
 	*go.dev/dl/*mode=json*)

@@ -1,0 +1,3 @@
+NAME=gost
+DESCRIPTION=gost (GO Simple Tunnel): a Go-based proxy tool
+HOMEPAGE=https://github.com/ginuerzh/gost
