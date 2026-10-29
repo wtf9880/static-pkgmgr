@@ -1,0 +1,3 @@
+NAME=websocat
+DESCRIPTION=websocat: a WebSocket command-line client and debugging tool
+HOMEPAGE=https://github.com/vi/websocat

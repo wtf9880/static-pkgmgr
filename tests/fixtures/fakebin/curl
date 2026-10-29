@@ -49,11 +49,30 @@ for a in "$@"; do
 	case "$a" in -*I*) head=1 ;; esac
 done
 
-# Serve an archive fixture: HEAD -> Content-Length header, GET -> bytes.
+# Parse curl's -o <file> (write body to this file instead of stdout), in both the
+# "-o file" (two-arg) and "-ofile" (one-arg) forms. Existing callers that do not
+# use -o leave out_file empty, preserving the original stdout behavior.
+out_file=""
+_spm_next_out=0
+for a in "$@"; do
+	if [ "$_spm_next_out" = 1 ]; then
+		out_file="$a"
+		_spm_next_out=0
+	elif [ "$a" = "-o" ]; then
+		_spm_next_out=1
+	elif [ "${a#-o}" != "$a" ] && [ "$a" != "-o" ]; then
+		out_file="${a#-o}"
+	fi
+done
+
+# Serve an archive/binary fixture: HEAD -> Content-Length header, GET -> bytes
+# (to stdout, or to the -o target when the caller requested it).
 serve_archive() {
 	local file="$1"
 	if [ "$head" = 1 ]; then
 		printf 'HTTP/1.1 200 OK\r\nContent-Length: %s\r\n\r\n' "$(wc -c < "$file")"
+	elif [ -n "$out_file" ]; then
+		cat "$file" >"$out_file"
 	else
 		cat "$file"
 	fi
@@ -63,6 +82,11 @@ case "$url" in
 	*api.github.com/repos/ginuerzh/gost/releases*)
 		if [ -n "$fx" ] && [ -f "$fx/gost-releases.json" ]; then
 			cat "$fx/gost-releases.json"; exit 0
+		fi
+		;;
+	*api.github.com/repos/vi/websocat/releases*)
+		if [ -n "$fx" ] && [ -f "$fx/websocat-releases.json" ]; then
+			cat "$fx/websocat-releases.json"; exit 0
 		fi
 		;;
 	*api.github.com/repos/*/releases*)
@@ -98,6 +122,11 @@ case "$url" in
 	*github.com/ginuerzh/gost/releases/download/*gost*.tar.gz)
 		if [ -n "$fx" ] && [ -f "$fx/phase4gost.tar.gz" ]; then
 			serve_archive "$fx/phase4gost.tar.gz"; exit 0
+		fi
+		;;
+	*github.com/vi/websocat/releases/download/*websocat*)
+		if [ -n "$fx" ] && [ -f "$fx/phase4websocat" ]; then
+			serve_archive "$fx/phase4websocat"; exit 0
 		fi
 		;;
 	*go.dev/dl/*mode=json*)

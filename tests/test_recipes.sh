@@ -122,6 +122,34 @@ $gost_sha  gost_2.12.0_linux_amd64.tar.gz
 $gost_sha  gost_2.12.0_linux_arm64.tar.gz
 SHAS
 
+# websocat fixture: a standalone executable BINARY (not a tarball). websocat
+# publishes plain statically-linked binaries (application/octet-stream) named
+# websocat.<triple>, so the recipe uses spm_download_verified (the seekable-file
+# case) rather than spm_stream_extract. The fake curl serves this file for both
+# arches and for HEAD (size) requests.
+mkdir -p "$SBX/wc"
+printf '#!/usr/bin/env bash\necho "phase4 websocat v1.14.1 from static-pkgmgr fixture"\n' \
+	> "$SBX/wc/websocat.x86_64-unknown-linux-musl"
+chmod +x "$SBX/wc/websocat.x86_64-unknown-linux-musl"
+cp "$SBX/wc/websocat.x86_64-unknown-linux-musl" "$SBX/phase4websocat"
+wc_sha=$(sha256sum "$SBX/phase4websocat" | cut -d' ' -f1)
+wc_size=$(wc -c < "$SBX/phase4websocat" | tr -d ' ')
+# Canned GitHub releases for websocat. v4.0.0-alpha3 is listed first
+# (newest-first, like the live API) to confirm the recipe's anchored tag regex
+# skips pre-release/alpha tags and lands on the latest stable (v1.14.1). Asset
+# digests are published as "sha256:<hex>" (the real websocat format), so the
+# recipe strips the "sha256:" prefix; both arches reuse the same fixture sha,
+# which the fake curl serves as identical bytes.
+cat > "$SBX/websocat-releases.json" <<JSON
+[
+  {"tag_name":"v4.0.0-alpha3","name":"v4.0.0-alpha3","assets":[]},
+  {"tag_name":"v1.14.1","name":"v1.14.1","assets":[
+    {"name":"websocat.x86_64-unknown-linux-musl","browser_download_url":"https://github.com/vi/websocat/releases/download/v1.14.1/websocat.x86_64-unknown-linux-musl","digest":"sha256:$wc_sha"},
+    {"name":"websocat.aarch64-unknown-linux-musl","browser_download_url":"https://github.com/vi/websocat/releases/download/v1.14.1/websocat.aarch64-unknown-linux-musl","digest":"sha256:$wc_sha"}]},
+  {"tag_name":"v1.14.0","name":"v1.14.0","assets":[]}
+]
+JSON
+
 # --- isolated sandbox + test repo with nodejs + ripgrep recipes -------------
 spm_setup_test_env
 # spm_setup_test_repo makes the test repo's packages/ a symlink to
@@ -138,6 +166,7 @@ ln -s "$_REAL_ROOT/packages/nodejs" "$SPM_TEST_ROOT/packages/nodejs"
 ln -s "$_REAL_ROOT/packages/ripgrep" "$SPM_TEST_ROOT/packages/ripgrep"
 ln -s "$_REAL_ROOT/packages/golang" "$SPM_TEST_ROOT/packages/golang"
 ln -s "$_REAL_ROOT/packages/gost" "$SPM_TEST_ROOT/packages/gost"
+ln -s "$_REAL_ROOT/packages/websocat" "$SPM_TEST_ROOT/packages/websocat"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -298,6 +327,38 @@ spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "gost lock show should be up-to-date after install"
 spm_false "staging tree left after gost install" test -e "$APPS_DIR/.staging/gost"
+
+# --- websocat: lock update -> resolve v1.14.1 via GitHub releases ------------
+# websocat interleaves alpha/pre-release tags newest-first; the recipe's
+# anchored tag regex must skip them and land on the latest stable (v1.14.1).
+# Asset digests are "sha256:<hex>" (the real websocat format), so the recipe
+# strips the "sha256:" prefix to get the raw pin sha256. (§7.2, §8)
+spm_run bash "$BIN" lock update websocat
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/websocat.json")" "1.14.1" \
+	|| spm_fail "websocat lock version should be 1.14.1"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/websocat.json")" "$wc_sha" \
+	|| spm_fail "websocat lock sha should match the fixture binary"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/websocat.json")" "$wc_size" \
+	|| spm_fail "websocat lock size should match the fixture binary"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/websocat.json")" \
+	"https://github.com/vi/websocat/releases/download/v1.14.1/websocat.$([ "$SPM_ARCH" = "x86_64" ] && echo x86_64 || echo aarch64)-unknown-linux-musl" \
+	|| spm_fail "websocat lock url wrong"
+
+# --- websocat: install (download verified binary + link, no tarball) ---------
+# The asset is a plain executable binary, so spm_download_verified is used
+# instead of spm_stream_extract; no wrapper directory to flatten. (§7.3, §8)
+spm_run bash "$BIN" install websocat
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$("$BIN_DIR/websocat" 2>/dev/null)" "phase4 websocat v1.14.1 from static-pkgmgr fixture" \
+	|| spm_fail "websocat install: bin/websocat produced wrong output"
+spm_eq "$(jq -r '.version' "$APPS_DIR/websocat/.spm/lock.json")" "1.14.1" \
+	|| spm_fail "websocat install: .spm/lock.json version wrong"
+spm_run bash "$BIN" lock show websocat
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_OUT" "up-to-date" \
+	|| spm_fail "websocat lock show should be up-to-date after install"
+spm_false "staging tree left after websocat install" test -e "$APPS_DIR/.staging/websocat"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs
