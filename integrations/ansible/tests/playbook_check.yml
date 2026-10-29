@@ -1,0 +1,36 @@
+---
+# check_mode validation for the static_pkgmgr Ansible module.
+# Run with `ansible-playbook --check ...` against a FRESH state (so helloapp
+# is not installed). Confirms the module predicts changes without writing.
+- name: Validate static_pkgmgr module check_mode predictions
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    spm_config_dir: "{{ lookup('env','SPM_CONFIG_DIR') }}"
+
+  tasks:
+    - name: "check_mode present (not installed) -> predicts install"
+      static_pkgmgr:
+        name: helloapp
+        state: present
+        test_mode: true
+        config_dir: "{{ spm_config_dir }}"
+      register: c_present
+    - assert:
+        that:
+          - c_present.changed == true
+        fail_msg: "check_mode should predict changed=true for a missing package"
+
+    - name: "check_mode absent (not installed) -> predicts no change"
+      static_pkgmgr:
+        name: helloapp
+        state: absent
+        test_mode: true
+        config_dir: "{{ spm_config_dir }}"
+      register: c_absent
+    - assert:
+        that:
+          - c_absent.changed == false
+        fail_msg: "check_mode should predict changed=false when already absent"
