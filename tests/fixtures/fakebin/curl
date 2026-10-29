@@ -89,6 +89,11 @@ case "$url" in
 			cat "$fx/websocat-releases.json"; exit 0
 		fi
 		;;
+	*api.github.com/repos/pythops/tmux-linux-binary/releases*)
+		if [ -n "$fx" ] && [ -f "$fx/tmux-linux-binary-releases.json" ]; then
+			cat "$fx/tmux-linux-binary-releases.json"; exit 0
+		fi
+		;;
 	*api.github.com/repos/*/releases*)
 		if [ -n "$fx" ] && [ -f "$fx/ripgrep-releases.json" ]; then
 			cat "$fx/ripgrep-releases.json"; exit 0
@@ -127,6 +132,11 @@ case "$url" in
 	*github.com/vi/websocat/releases/download/*websocat*)
 		if [ -n "$fx" ] && [ -f "$fx/phase4websocat" ]; then
 			serve_archive "$fx/phase4websocat"; exit 0
+		fi
+		;;
+	*github.com/pythops/tmux-linux-binary/releases/download/*tmux-linux*)
+		if [ -n "$fx" ] && [ -f "$fx/phase4tmux" ]; then
+			serve_archive "$fx/phase4tmux"; exit 0
 		fi
 		;;
 	*go.dev/dl/*mode=json*)
