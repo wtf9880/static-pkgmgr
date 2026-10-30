@@ -61,12 +61,6 @@ static-pkgmgr/
 │   └── test_*.sh
 ├── scripts/
 │   └── bootstrap-deps.sh      # optional: installs jq, curl, etc.
-├── integrations/              # non-core tooling that wraps or consumes static-pkgmgr
-│   ├── ansible/               # reference custom module + example playbooks (NOT a collection)
-│   │   ├── library/static_pkgmgr.py
-│   │   ├── playbooks/manage_packages.yml
-│   │   ├── tests/run_validation.sh + playbook_*.yml
-│   └── README.md
 ├── .github/workflows/ci.yml   # shellcheck -x and tests/run.sh
 ├── AGENTS.md                  # rules for coding agents
 ├── CONTRIBUTING.md            # packager guide: recipe contracts and helper API
@@ -75,13 +69,6 @@ static-pkgmgr/
 ```
 
 Helpers and `lib/` files are sourced, never executed directly.
-
-`integrations/` holds non-core, consumer-side helpers and is *not* part of the
-Bash-only core (`§15` phases / `AGENTS.md` dependency rules apply to `bin/`,
-`lib/`, `helpers/`, `packages/`, `tests/`, `scripts/` only). It is not scanned
-by the core CI (`shellcheck -x` and `tests/run.sh` cover the core only) and is
-not required to use `static-pkgmgr`. `integrations/ansible/` is a reference
-custom module + playbooks loaded via `ANSIBLE_LIBRARY`; `integrations/ansible-collection/` is a publishable Ansible collection (buildable with `ansible-galaxy collection build`); it is intended to be split into its own repository and published to Ansible Galaxy with its own release cadence, decoupled from this core.
 
 The entrypoint resolves itself with `readlink -f`, sets `SPM_ROOT`, and reads `packages/` from there. Install the tool by symlinking it:
 
