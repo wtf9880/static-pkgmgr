@@ -94,6 +94,11 @@ case "$url" in
 			cat "$fx/tmux-linux-binary-releases.json"; exit 0
 		fi
 		;;
+	*api.github.com/repos/neovim/neovim/releases*)
+		if [ -n "$fx" ] && [ -f "$fx/neovim-releases.json" ]; then
+			cat "$fx/neovim-releases.json"; exit 0
+		fi
+		;;
 	*api.github.com/repos/*/releases*)
 		if [ -n "$fx" ] && [ -f "$fx/ripgrep-releases.json" ]; then
 			cat "$fx/ripgrep-releases.json"; exit 0
@@ -117,6 +122,11 @@ case "$url" in
 	*github.com/*/releases/download/*ripgrep*.tar.gz)
 		if [ -n "$fx" ] && [ -f "$fx/phase4rg.tar.gz" ]; then
 			serve_archive "$fx/phase4rg.tar.gz"; exit 0
+		fi
+		;;
+	*github.com/neovim/neovim/releases/download/*nvim-linux-*.tar.gz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4nvim.tar.gz" ]; then
+			serve_archive "$fx/phase4nvim.tar.gz"; exit 0
 		fi
 		;;
 	*github.com/ginuerzh/gost/releases/download/*/checksums.txt)

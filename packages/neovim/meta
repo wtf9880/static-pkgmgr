@@ -1,0 +1,3 @@
+NAME=neovim
+DESCRIPTION=Neovim: a fork of Vim for extensibility and maintainability
+HOMEPAGE=https://neovim.io/

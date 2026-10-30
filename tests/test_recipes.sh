@@ -175,6 +175,47 @@ cat > "$SBX/tmux-linux-binary-releases.json" <<JSON
 ]
 JSON
 
+# neovim fixture: nvim-linux-x86_64/bin/nvim (the real tarball wraps its
+# contents in a single "nvim-linux-<arch>/" directory, like nodejs/Go), plus a
+# lib and share file to confirm the whole wrapper tree is flattened out, not
+# just bin/. The fake curl serves this archive (identical bytes) for both
+# arches.
+mkdir -p "$SBX/nvim/nvim-linux-x86_64/bin" \
+	"$SBX/nvim/nvim-linux-x86_64/lib/nvim/parser" \
+	"$SBX/nvim/nvim-linux-x86_64/share/nvim/runtime"
+printf '#!/usr/bin/env bash\necho "phase4 nvim v0.1.0 from static-pkgmgr fixture"\n' \
+	> "$SBX/nvim/nvim-linux-x86_64/bin/nvim"
+printf 'nvim parser\n' > "$SBX/nvim/nvim-linux-x86_64/lib/nvim/parser/x.so"
+printf 'runtime\n' > "$SBX/nvim/nvim-linux-x86_64/share/nvim/runtime/x"
+chmod +x "$SBX/nvim/nvim-linux-x86_64/bin/nvim"
+tar -C "$SBX/nvim" -czf "$SBX/phase4nvim.tar.gz" nvim-linux-x86_64
+nvim_sha=$(sha256sum "$SBX/phase4nvim.tar.gz" | cut -d' ' -f1)
+nvim_size=$(wc -c < "$SBX/phase4nvim.tar.gz" | tr -d ' ')
+# Canned GitHub releases for neovim. "nightly" (prerelease) and "stable" are
+# listed newest-first before v0.1.0 to confirm the recipe's anchored tag regex
+# skips them (despite them shipping nvim-linux-<arch>.tar.gz assets) and lands
+# on v0.1.0; v0.0.9 is an older stable that must not be selected. The two
+# distractor releases carry an all-zero digest so a wrong pick would fail the
+# sha assertion. Asset digests are "sha256:<hex>" (the real neovim format for
+# v0.11.3+), so the recipe strips the prefix; both arches reuse the same fixture
+# sha, which the fake curl serves as identical bytes. (§7.2, §8, §14)
+cat > "$SBX/neovim-releases.json" <<JSON
+[
+  {"tag_name":"nightly","name":"nightly","assets":[
+    {"name":"nvim-linux-x86_64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/nightly/nvim-linux-x86_64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+    {"name":"nvim-linux-arm64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/nightly/nvim-linux-arm64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]},
+  {"tag_name":"stable","name":"stable","assets":[
+    {"name":"nvim-linux-x86_64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+    {"name":"nvim-linux-arm64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/stable/nvim-linux-arm64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]},
+  {"tag_name":"v0.1.0","name":"v0.1.0","assets":[
+    {"name":"nvim-linux-x86_64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/v0.1.0/nvim-linux-x86_64.tar.gz","digest":"sha256:$nvim_sha"},
+    {"name":"nvim-linux-arm64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/v0.1.0/nvim-linux-arm64.tar.gz","digest":"sha256:$nvim_sha"}]},
+  {"tag_name":"v0.0.9","name":"v0.0.9","assets":[
+    {"name":"nvim-linux-x86_64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/v0.0.9/nvim-linux-x86_64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+    {"name":"nvim-linux-arm64.tar.gz","browser_download_url":"https://github.com/neovim/neovim/releases/download/v0.0.9/nvim-linux-arm64.tar.gz","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}
+]
+JSON
+
 # --- isolated sandbox + test repo with nodejs + ripgrep recipes -------------
 spm_setup_test_env
 # spm_setup_test_repo makes the test repo's packages/ a symlink to
@@ -193,6 +234,7 @@ ln -s "$_REAL_ROOT/packages/golang" "$SPM_TEST_ROOT/packages/golang"
 ln -s "$_REAL_ROOT/packages/gost" "$SPM_TEST_ROOT/packages/gost"
 ln -s "$_REAL_ROOT/packages/websocat" "$SPM_TEST_ROOT/packages/websocat"
 ln -s "$_REAL_ROOT/packages/tmux" "$SPM_TEST_ROOT/packages/tmux"
+ln -s "$_REAL_ROOT/packages/neovim" "$SPM_TEST_ROOT/packages/neovim"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -419,6 +461,40 @@ spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "tmux lock show should be up-to-date after install"
 spm_false "staging tree left after tmux install" test -e "$APPS_DIR/.staging/tmux"
+
+# --- neovim: lock update -> resolve v0.1.0 via GitHub releases ----------------
+# The canned JSON lists "nightly" (prerelease) and "stable" newest-first before
+# v0.1.0; the recipe's anchored tag regex skips them and lands on v0.1.0. Asset
+# digests are "sha256:<hex>" (the real neovim format), so the recipe strips the
+# prefix to get the raw pin sha256. (§7.2, §8, §14)
+spm_run bash "$BIN" lock update neovim
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/neovim.json")" "0.1.0" \
+	|| spm_fail "neovim lock version should be 0.1.0"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/neovim.json")" "$nvim_sha" \
+	|| spm_fail "neovim lock sha should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/neovim.json")" "$nvim_size" \
+	|| spm_fail "neovim lock size should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/neovim.json")" \
+	"https://github.com/neovim/neovim/releases/download/v0.1.0/nvim-linux-$([ "$SPM_ARCH" = "x86_64" ] && echo x86_64 || echo arm64).tar.gz" \
+	|| spm_fail "neovim lock url wrong"
+
+# --- neovim: install (stream extract + flatten + link) ------------------------
+# The tarball wraps contents in "nvim-linux-<arch>/" (bin/lib/share tree),
+# which is flattened so bin/nvim resolves against the app root; the link plan
+# records "nvim" in $BIN_DIR. lib/ and share/ are flattened too, so the binary
+# finds its runtime relative to itself. (§7.3)
+spm_run bash "$BIN" install neovim
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$("$BIN_DIR/nvim" 2>/dev/null)" "phase4 nvim v0.1.0 from static-pkgmgr fixture" \
+	|| spm_fail "neovim install: bin/nvim produced wrong output"
+spm_eq "$(jq -r '.version' "$APPS_DIR/neovim/.spm/lock.json")" "0.1.0" \
+	|| spm_fail "neovim install: .spm/lock.json version wrong"
+spm_run bash "$BIN" lock show neovim
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_OUT" "up-to-date" \
+	|| spm_fail "neovim lock show should be up-to-date after install"
+spm_false "staging tree left after neovim install" test -e "$APPS_DIR/.staging/neovim"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs
