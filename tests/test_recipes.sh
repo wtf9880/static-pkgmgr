@@ -192,7 +192,7 @@ ln -s "$_REAL_ROOT/packages/ripgrep" "$SPM_TEST_ROOT/packages/ripgrep"
 ln -s "$_REAL_ROOT/packages/golang" "$SPM_TEST_ROOT/packages/golang"
 ln -s "$_REAL_ROOT/packages/gost" "$SPM_TEST_ROOT/packages/gost"
 ln -s "$_REAL_ROOT/packages/websocat" "$SPM_TEST_ROOT/packages/websocat"
-ln -s "$_REAL_ROOT/packages/tmux-linux-binary" "$SPM_TEST_ROOT/packages/tmux-linux-binary"
+ln -s "$_REAL_ROOT/packages/tmux" "$SPM_TEST_ROOT/packages/tmux"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -386,39 +386,39 @@ spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "websocat lock show should be up-to-date after install"
 spm_false "staging tree left after websocat install" test -e "$APPS_DIR/.staging/websocat"
 
-# --- tmux-linux-binary: lock update -> resolve v3.6b via GitHub releases -------
+# --- tmux: lock update -> resolve v3.6b via GitHub releases -------
 # The recipe's tag regex matches pythops' tag scheme (v3.6b, v3.6a, v3.6 ...);
 # the canned JSON lists v3.6b first (newest-first) and v3.6a after, so the
 # first match is the latest (v3.6b). Asset digests are "sha256:<hex>", so the
 # recipe strips the prefix. (§7.2, §8)
-spm_run bash "$BIN" lock update tmux-linux-binary
+spm_run bash "$BIN" lock update tmux
 spm_eq_int "$SPM_CODE" 0
-spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/tmux-linux-binary.json")" "3.6b" \
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/tmux.json")" "3.6b" \
 	|| spm_fail "tmux lock version should be 3.6b"
-spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/tmux-linux-binary.json")" "$tmux_sha" \
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/tmux.json")" "$tmux_sha" \
 	|| spm_fail "tmux lock sha should match the fixture binary"
-spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/tmux-linux-binary.json")" "$tmux_size" \
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/tmux.json")" "$tmux_size" \
 	|| spm_fail "tmux lock size should match the fixture binary"
-spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/tmux-linux-binary.json")" \
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/tmux.json")" \
 	"https://github.com/pythops/tmux-linux-binary/releases/download/v3.6b/tmux-linux-$([ "$SPM_ARCH" = "x86_64" ] && echo x86_64 || echo arm64)" \
 	|| spm_fail "tmux lock url wrong"
 
-# --- tmux-linux-binary: install (download verified binary + link, no tarball) --
+# --- tmux: install (download verified binary + link, no tarball) --
 # The asset is a plain executable binary named tmux-linux-<triple>; the recipe
 # downloads it with spm_download_verified, renames it to bin/tmux, and links
 # "tmux" into $BIN_DIR. No archive to extract, no wrapper directory to flatten.
 # (§7.3, §8)
-spm_run bash "$BIN" install tmux-linux-binary
+spm_run bash "$BIN" install tmux
 spm_eq_int "$SPM_CODE" 0
 spm_eq "$("$BIN_DIR/tmux" 2>/dev/null)" "phase4 tmux 3.6b from static-pkgmgr fixture" \
 	|| spm_fail "tmux install: bin/tmux produced wrong output"
-spm_eq "$(jq -r '.version' "$APPS_DIR/tmux-linux-binary/.spm/lock.json")" "3.6b" \
+spm_eq "$(jq -r '.version' "$APPS_DIR/tmux/.spm/lock.json")" "3.6b" \
 	|| spm_fail "tmux install: .spm/lock.json version wrong"
-spm_run bash "$BIN" lock show tmux-linux-binary
+spm_run bash "$BIN" lock show tmux
 spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "tmux lock show should be up-to-date after install"
-spm_false "staging tree left after tmux install" test -e "$APPS_DIR/.staging/tmux-linux-binary"
+spm_false "staging tree left after tmux install" test -e "$APPS_DIR/.staging/tmux"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs
