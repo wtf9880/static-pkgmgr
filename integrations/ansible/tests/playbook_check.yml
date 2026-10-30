@@ -23,6 +23,18 @@
           - c_present.changed == true
         fail_msg: "check_mode should predict changed=true for a missing package"
 
+    - name: "check_mode latest (not installed) -> predicts install (exercises dry-run resolve)"
+      static_pkgmgr:
+        name: helloapp
+        state: latest
+        test_mode: true
+        config_dir: "{{ spm_config_dir }}"
+      register: c_latest
+    - assert:
+        that:
+          - c_latest.changed == true
+        fail_msg: "check_mode should predict changed=true for latest on a missing package"
+
     - name: "check_mode absent (not installed) -> predicts no change"
       static_pkgmgr:
         name: helloapp

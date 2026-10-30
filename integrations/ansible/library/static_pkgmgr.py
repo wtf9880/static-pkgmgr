@@ -118,11 +118,12 @@ def lock_show(module, name):
 def dryrun_latest_version(module, name):
     """Resolve the latest version *without writing a pin* (check_mode helper).
 
-    Uses `lock update --dry-run`, whose output is:
-        'lock: would update pin for <pkg> to <VER> (requested=latest) (dry-run)'
-    Returns the resolved version string, or None if it could not be parsed.
+    Uses the GLOBAL --dry-run/-n, which must precede the subcommand (§12):
+    `static-pkgmgr -n lock update <pkg>`. The CLI does NOT accept `-n` after
+    `lock update` (it errors with "invalid option"), so `-n` is passed as part
+    of the command prefix, not as an argument to `lock update`.
     """
-    rc, out, _ = run_spm(module, ["lock", "update", "-n", name], check=False)
+    rc, out, _ = run_spm(module, ["-n", "lock", "update", name], check=False)
     if rc != 0 or not out:
         return None
     m = re.search(re.escape(name) + r"\b.*?to (\S+)", out)
@@ -166,7 +167,9 @@ def ensure_present(module, name, version):
     if version:
         spec = name + ("@latest" if version == "latest" else "@" + version)
         if check:
-            rc, out, err = run_spm(module, ["lock", "update", "-n", spec], check=False)
+            # Global --dry-run/-n before the subcommand (§12); the CLI
+            # rejects `-n` placed after `lock update`.
+            rc, out, err = run_spm(module, ["-n", "lock", "update", spec], check=False)
             if rc != 0:
                 module.fail_json(msg="lock update (dry-run) failed for " + spec, rc=rc, stdout=out, stderr=err)
         else:
