@@ -216,6 +216,52 @@ cat > "$SBX/neovim-releases.json" <<JSON
 ]
 JSON
 
+# zig fixture: zig-x86_64-linux-0.1.0/zig (binary at the wrapper root, plus
+# lib/ and doc/ to confirm the whole tree is flattened), mirroring the real
+# tarball layout. zig wraps its contents in a single
+# "zig-x86_64-linux-<ver>/" directory (the "zig-*/" glob the recipe flattens
+# matches it), and ships xz-compressed tarballs, so this fixture is .tar.xz
+# (like the nodejs fixture). The fake curl serves this archive (identical bytes)
+# for both arches.
+mkdir -p "$SBX/zig/zig-x86_64-linux-0.1.0/lib/zig" "$SBX/zig/zig-x86_64-linux-0.1.0/doc"
+printf '#!/usr/bin/env bash\necho "phase4 zig 0.1.0 from static-pkgmgr fixture"\n' \
+	> "$SBX/zig/zig-x86_64-linux-0.1.0/zig"
+printf 'pub fn main() {}\n' > "$SBX/zig/zig-x86_64-linux-0.1.0/lib/zig/std.zig"
+printf 'langref\n' > "$SBX/zig/zig-x86_64-linux-0.1.0/doc/langref.html"
+printf 'license\n' > "$SBX/zig/zig-x86_64-linux-0.1.0/LICENSE"
+printf 'readme\n' > "$SBX/zig/zig-x86_64-linux-0.1.0/README.md"
+chmod +x "$SBX/zig/zig-x86_64-linux-0.1.0/zig"
+tar -C "$SBX/zig" -cJf "$SBX/phase4zig.tar.xz" zig-x86_64-linux-0.1.0
+zig_sha=$(sha256sum "$SBX/phase4zig.tar.xz" | cut -d' ' -f1)
+zig_size=$(wc -c < "$SBX/phase4zig.tar.xz" | tr -d ' ')
+# Canned zig download index (https://ziglang.org/download/index.json): an object
+# keyed by version (plus a "master" dev-build key). "0.1.0" is the newest stable
+# -- sort -V picks it over "0.0.9", which is lexicographically larger ("0.1.0" <
+# "0.0.9") but a smaller version -- and "master" is excluded by the numeric
+# filter. The distractor "0.0.9" carries an all-zero shasum so a wrong pick
+# (naive string sort) would fail the sha assertion. The index supplies the
+# upstream SHA256 (bare 64-hex, no prefix to strip) and size for both platforms.
+# (§7.2, §8, §14)
+cat > "$SBX/zig-index.json" <<JSON
+{
+  "master": {
+    "version": "master",
+    "x86_64-linux": {"tarball": "https://ziglang.org/download/master/zig-x86_64-linux-master.tar.xz", "shasum": "0000000000000000000000000000000000000000000000000000000000000000", "size": "1"}
+  },
+  "0.0.9": {
+    "version": "0.0.9",
+    "x86_64-linux": {"tarball": "https://ziglang.org/download/0.0.9/zig-x86_64-linux-0.0.9.tar.xz", "shasum": "0000000000000000000000000000000000000000000000000000000000000000", "size": "1"},
+    "aarch64-linux": {"tarball": "https://ziglang.org/download/0.0.9/zig-aarch64-linux-0.0.9.tar.xz", "shasum": "0000000000000000000000000000000000000000000000000000000000000000", "size": "1"}
+  },
+  "0.1.0": {
+    "version": "0.1.0",
+    "date": "2026-01-02",
+    "x86_64-linux": {"tarball": "https://ziglang.org/download/0.1.0/zig-x86_64-linux-0.1.0.tar.xz", "shasum": "$zig_sha", "size": "$zig_size"},
+    "aarch64-linux": {"tarball": "https://ziglang.org/download/0.1.0/zig-aarch64-linux-0.1.0.tar.xz", "shasum": "$zig_sha", "size": "$zig_size"}
+  }
+}
+JSON
+
 # --- isolated sandbox + test repo with nodejs + ripgrep recipes -------------
 spm_setup_test_env
 # spm_setup_test_repo makes the test repo's packages/ a symlink to
@@ -235,6 +281,7 @@ ln -s "$_REAL_ROOT/packages/gost" "$SPM_TEST_ROOT/packages/gost"
 ln -s "$_REAL_ROOT/packages/websocat" "$SPM_TEST_ROOT/packages/websocat"
 ln -s "$_REAL_ROOT/packages/tmux" "$SPM_TEST_ROOT/packages/tmux"
 ln -s "$_REAL_ROOT/packages/neovim" "$SPM_TEST_ROOT/packages/neovim"
+ln -s "$_REAL_ROOT/packages/zig" "$SPM_TEST_ROOT/packages/zig"
 
 # Intercept curl calls with the fake curl test double.
 PATH="$_REAL_ROOT/tests/fixtures/fakebin:$PATH"
@@ -495,6 +542,42 @@ spm_eq_int "$SPM_CODE" 0
 spm_contains "$SPM_OUT" "up-to-date" \
 	|| spm_fail "neovim lock show should be up-to-date after install"
 spm_false "staging tree left after neovim install" test -e "$APPS_DIR/.staging/neovim"
+
+# --- zig: lock update -> resolve 0.1.0 via the download index -----------------
+# The canned index lists "master" and an older "0.0.9" (lexicographically
+# larger than "0.1.0" but a smaller version) before 0.1.0; sort -V picks 0.1.0
+# and the numeric filter drops "master". The index supplies the upstream SHA256
+# (bare 64-hex) and size for both platforms, so the recipe uses them directly
+# (no trust-on-first-use fallback). (§7.2, §8, §14)
+spm_run bash "$BIN" lock update zig
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$(jq -r '.version' "$SPM_CONFIG_DIR/locks/zig.json")" "0.1.0" \
+	|| spm_fail "zig lock version should be 0.1.0"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].sha256' "$SPM_CONFIG_DIR/locks/zig.json")" "$zig_sha" \
+	|| spm_fail "zig lock sha should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].size' "$SPM_CONFIG_DIR/locks/zig.json")" "$zig_size" \
+	|| spm_fail "zig lock size should match the fixture archive"
+spm_eq "$(jq -r --arg a "$SPM_ARCH" '.artifacts[$a].url' "$SPM_CONFIG_DIR/locks/zig.json")" \
+	"https://ziglang.org/download/0.1.0/zig-$([ "$SPM_ARCH" = "x86_64" ] && echo x86_64 || echo aarch64)-linux-0.1.0.tar.xz" \
+	|| spm_fail "zig lock url wrong"
+
+# --- zig: install (xz stream extract + flatten + link) ------------------------
+# The tarball wraps contents in "zig-x86_64-linux-0.1.0/" (the "zig" binary at
+# the wrapper root, plus lib/ and doc/); the "zig-*/" glob flattens it so the
+# binary lands at the app root next to lib/, and "zig" is linked into $BIN_DIR.
+# (§7.3)
+spm_run bash "$BIN" install zig
+spm_eq_int "$SPM_CODE" 0
+spm_eq "$("$BIN_DIR/zig" 2>/dev/null)" "phase4 zig 0.1.0 from static-pkgmgr fixture" \
+	|| spm_fail "zig install: bin/zig produced wrong output"
+spm_true "zig lib/ should be flattened to app root" test -e "$APPS_DIR/zig/lib/zig/std.zig"
+spm_eq "$(jq -r '.version' "$APPS_DIR/zig/.spm/lock.json")" "0.1.0" \
+	|| spm_fail "zig install: .spm/lock.json version wrong"
+spm_run bash "$BIN" lock show zig
+spm_eq_int "$SPM_CODE" 0
+spm_contains "$SPM_OUT" "up-to-date" \
+	|| spm_fail "zig lock show should be up-to-date after install"
+spm_false "staging tree left after zig install" test -e "$APPS_DIR/.staging/zig"
 
 # --- cross-check: lock update (dry-run) changes nothing ----------------------
 spm_run bash "$BIN" -n lock update nodejs

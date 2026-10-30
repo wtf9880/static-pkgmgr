@@ -159,6 +159,16 @@ case "$url" in
 			serve_archive "$fx/phase4golang.tar.gz"; exit 0
 		fi
 		;;
+	*ziglang.org/download/index.json*)
+		if [ -n "$fx" ] && [ -f "$fx/zig-index.json" ]; then
+			cat "$fx/zig-index.json"; exit 0
+		fi
+		;;
+	*ziglang.org/download/*/zig-*.tar.xz)
+		if [ -n "$fx" ] && [ -f "$fx/phase4zig.tar.xz" ]; then
+			serve_archive "$fx/phase4zig.tar.xz"; exit 0
+		fi
+		;;
 esac
 
 # Unrecognised https URL: fall back to the real curl (network).
